@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en" data-theme="charcoal">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>Framefold · Automatic video clipping</title>
+  <script src="/theme.js"></script>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="top"><div class="shell bar">
+    <a class="brand" href="#/"><span class="mark" aria-hidden="true"></span>Framefold</a>
+    <nav aria-label="Main"><a id="nav-generate" href="#/">Generator</a><a id="nav-runs" href="#/runs">My runs</a></nav>
+    <div class="header-actions">
+      <span id="worker" class="worker"><span aria-hidden="true">○</span> <span id="worker-label">Checking worker</span></span>
+      <button id="theme-button" aria-expanded="false" aria-controls="theme-picker"><span aria-hidden="true">◐</span> Theme</button>
+      <div id="theme-picker" class="theme-picker" hidden>
+        <fieldset><legend>Appearance</legend>
+          <label><input type="radio" name="theme" value="charcoal"><span class="swatch charcoal"></span>Charcoal</label>
+          <label><input type="radio" name="theme" value="forest"><span class="swatch forest"></span>Forest</label>
+          <label><input type="radio" name="theme" value="navy"><span class="swatch navy"></span>Navy</label>
+        </fieldset>
+      </div>
+    </div>
+  </div></header>
+  <main id="main" class="shell" tabindex="-1"></main>
+  <div id="announce" class="sr-only" aria-live="polite"></div>
+  <footer class="shell footer"><span>〈〉 Open-source workspace</span><span>Local processing</span></footer>
+</body>
+</html>
