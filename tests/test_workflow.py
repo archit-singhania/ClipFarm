@@ -1,4 +1,7 @@
 """Rights-cleared synthetic media through the production HTTP API and worker."""
+import array
+import math
+from concurrent.futures import ThreadPoolExecutor
 import http.cookiejar
 import io
 import json
@@ -6,6 +9,7 @@ import os
 from pathlib import Path
 import signal
 import shlex
+import sqlite3
 import socket
 import subprocess
 import sys
@@ -26,7 +30,7 @@ class Workflow(unittest.TestCase):
     def setUpClass(cls):
         cls.temporary = tempfile.TemporaryDirectory()
         cls.root = Path(cls.temporary.name)
-        cls.env = os.environ | {"FRAMEFOLD_DATA": str(cls.root / "data")}
+        cls.env = os.environ | {"FRAMEFOLD_DATA": str(cls.root / "data"), "CLIPFARM_DATA": str(cls.root / "data")}
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
             cls.port = listener.getsockname()[1]
@@ -161,6 +165,99 @@ class Workflow(unittest.TestCase):
         self.assertEqual((ready["artifact"]["width"], ready["artifact"]["height"]), (2160, 2160))
         self.assertEqual(next(item for item in updated["clips"] if item["id"] == clip["id"])["artifact"],
                          clip["artifact"])
+
+    def test_follow_subject_and_duck_music(self):
+        source = self.root / "Moving-subject.mp4"
+        track = self.root / "Music.wav"
+        ffmpeg("-f", "lavfi", "-i", "color=black:s=640x360:r=30:d=8", "-f", "lavfi", "-i",
+               "color=white:s=90x90:r=30:d=8", "-f", "lavfi", "-i",
+               r"aevalsrc=0.65*sin(2*PI*440*t)*between(t\,3\,5):d=8:s=48000",
+               "-filter_complex", "[0:v][1:v]overlay=x='65+56*t':y=115[out]", "-map", "[out]",
+               "-map", "2:a", "-c:v", "libx264", "-c:a", "aac", str(source))
+        ffmpeg("-f", "lavfi", "-i", "sine=f=1700:r=48000:d=1", str(track))
+        headers = {"Content-Type": "application/octet-stream", "X-File-Name": track.name}
+        with self.request("/api/music", track.read_bytes(), headers) as response:
+            music = json.load(response)
+        self.assertEqual(music["duration_ms"], 1000)
+        source_record = self.upload(source)
+        options = {"framing": "track", "music_id": music["id"], "count": 1}
+        job = self.wait(self.start(source_record, "follow", options))
+        self.assertEqual(job["state"], "ready", job)
+        clip = job["clips"][0]
+        self.assertEqual(clip["artifact"]["framing_applied"], "track")
+        self.assertTrue(clip["artifact"]["soundtrack"])
+        # Revise to the full source so measurement timestamps are independent of ranking.
+        endpoint = f"/api/clips/{clip['id']}/revisions"
+        copy = self.read(endpoint, {"start_ms": 0, "end_ms": 8000})
+        self.wait(job["id"])
+        local = self.root / "Tracked-mix.mp4"
+        with self.request(f"/api/clips/{copy['id']}/download") as response:
+            local.write_bytes(response.read())
+
+        def decode(at, *args):
+            return subprocess.check_output(["ffmpeg", "-v", "error", "-ss", str(at), "-i", str(local), *args, "-"])
+
+        for at in (.8, 4, 7.1):
+            frame = decode(at, "-vf", "scale=54:96,format=gray", "-frames:v", "1", "-f", "rawvideo")
+            bright = [i % 54 for i, value in enumerate(frame) if value > 150]
+            self.assertGreater(len(bright), 450)
+            self.assertAlmostEqual(sum(bright)/len(bright), 27, delta=4)
+
+        def tone_amplitude(at, hz):
+            pcm = array.array("f", decode(at, "-map", "0:a", "-t", "0.3", "-ac", "1",
+                                           "-ar", "16000", "-f", "f32le"))
+            angles = [2*math.pi*hz*i/16000 for i in range(len(pcm))]
+            x = sum(v*math.cos(a) for v, a in zip(pcm, angles))
+            y = sum(v*math.sin(a) for v, a in zip(pcm, angles))
+            return 2*math.hypot(x, y)/len(pcm)
+
+        music_alone = tone_amplitude(2, 1700)
+        self.assertGreater(music_alone, .01)
+        self.assertLess(tone_amplitude(4, 1700), music_alone*.25)
+        self.assertGreater(tone_amplitude(6.5, 1700), music_alone*.8)
+        self.assertGreater(tone_amplitude(4, 440), .4)
+
+        plain = self.read(endpoint, {"start_ms": 0, "end_ms": 2000, "settings": {"music_id": None}})
+        finished = self.wait(job["id"])["clips"]
+        self.assertFalse(next(c for c in finished if c["id"] == plain["id"])["artifact"]["soundtrack"])
+        unknown = {"source": source_record["id"], "key": "missing-music", "settings": {"music_id": "0"*32}}
+        with self.assertRaises(urllib.error.HTTPError) as missing:
+            self.read("/api/jobs", unknown)
+        self.assertEqual(missing.exception.code, 404)
+
+    def test_concurrent_create_retry_and_cancellation(self):
+        source = self.root / "Concurrent.mp4"
+        ffmpeg("-f", "lavfi", "-i", "testsrc2=s=160x90:r=15:d=6", "-c:v", "libx264", str(source))
+        imported = self.upload(source)
+        self.stop_worker()
+        try:
+            body = {"source": imported["id"], "key": "concurrent", "settings": {}}
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                results = list(pool.map(lambda _: self.read("/api/jobs", body), range(4)))
+            self.assertEqual(len({result["id"] for result in results}), 1)
+            uid = results[0]["id"]
+            self.assertTrue(self.read(f"/api/jobs/{uid}/cancel", {})["ok"])
+            self.assertEqual(self.read(f"/api/jobs/{uid}")["state"], "cancelled")
+        finally:
+            self.start_worker()
+        run = self.wait(self.start(imported, "retry"))
+        self.assertEqual(run["state"], "ready", run)
+        clip = run["clips"][0]
+        # Place a failed clip at its durable checkpoint to isolate concurrent API retries.
+        self.stop_worker()
+        try:
+            with sqlite3.connect(self.root / "data" / "framefold.sqlite") as connection:
+                connection.execute("UPDATE clips SET state='failed', artifact=NULL WHERE id=?", (clip["id"],))
+                connection.execute("UPDATE jobs SET state='failed' WHERE id=?", (run["id"],))
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                retries = list(pool.map(lambda _: self.read(f"/api/clips/{clip['id']}/retry", {}), range(4)))
+            self.assertEqual(retries, [{"id": clip["id"]}]*4)
+        finally:
+            self.start_worker()
+        recovered = self.wait(run["id"])
+        self.assertEqual(recovered["state"], "ready")
+        self.assertEqual(len(recovered["clips"]), len(run["clips"]))
+        self.assertEqual(self.read(f"/api/jobs/{uid}")["state"], "cancelled")
 
     def test_static_and_invalid_link(self):
         source = self.root / "Static.mp4"

@@ -1,0 +1,66 @@
+{
+  "dataset_sha256": "b9b887f137bf0b3a36cc1728fc1fb96b4d0f2b8c632ef66c5f5a3ddbdd89bfc8",
+  "feature_version": "signals-1",
+  "features": [
+    "rule_score",
+    "duration_seconds",
+    "motion_mean",
+    "motion_peak",
+    "scene_changes",
+    "audio_mean",
+    "audio_peak",
+    "audio_available",
+    "speech_fraction",
+    "speech_available"
+  ],
+  "held_out_by_film": {
+    "bunny": {
+      "candidates_with_matches": 2,
+      "editorial": {
+        "ndcg_at_3": 0.0,
+        "top_3_with_matched_footage": 0
+      },
+      "generated_candidates": 63,
+      "rules": {
+        "ndcg_at_3": 0.0,
+        "top_3_with_matched_footage": 0
+      }
+    },
+    "steel": {
+      "candidates_with_matches": 13,
+      "editorial": {
+        "ndcg_at_3": 0.0,
+        "top_3_with_matched_footage": 0
+      },
+      "generated_candidates": 56,
+      "rules": {
+        "ndcg_at_3": 0.23463936301137825,
+        "top_3_with_matched_footage": 1
+      }
+    }
+  },
+  "lightgbm": "4.6.0",
+  "mean_held_out_ndcg_at_3": {
+    "editorial": 0.0,
+    "rules": 0.11731968150568912
+  },
+  "model_sha256": "2c8b32c2a1d994bd44f51bbe3fac4903d9444c6fa0a619c1a4a86f500bebb48b",
+  "name": "ClipFarm editorial pilot",
+  "parameters": {
+    "deterministic": true,
+    "force_col_wise": true,
+    "learning_rate": 0.05,
+    "max_depth": 3,
+    "min_data_in_leaf": 8,
+    "num_leaves": 5,
+    "num_threads": 2,
+    "objective": "lambdarank",
+    "reg_lambda": 2,
+    "seed": 42,
+    "verbosity": -1
+  },
+  "rounds": 30,
+  "target": "teaser_overlap",
+  "training_rows": 780,
+  "trees_sha256": "13cddd7be56e3233e61205fb04b580e7279e2908277b3a94d06f3bac07dfc42d"
+}

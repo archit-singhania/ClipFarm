@@ -1,0 +1,204 @@
+{
+  "tutorial": {
+    "source_duration_ms": 600000,
+    "source_bytes": 4443570,
+    "state": "ready",
+    "selector": "rules-1",
+    "first_s": 61.388,
+    "elapsed_s": 65.876,
+    "peak_rss_kib": 522272,
+    "observed_disk_growth_bytes": 23686360,
+    "outputs": [
+      {
+        "start": 0,
+        "end": 7230,
+        "captions": 2,
+        "width": 1920,
+        "height": 1080,
+        "upscaled": false,
+        "bytes": 136363,
+        "sha256": "74ed6af7c6107330ff5cd0162e45bdb3825a3504be17962ee1412aa3ed3308ce"
+      },
+      {
+        "start": 29750,
+        "end": 52870,
+        "captions": 2,
+        "width": 1920,
+        "height": 1080,
+        "upscaled": false,
+        "bytes": 210392,
+        "sha256": "84d1685a5b1ea4a02f5e35404966ca00fcca5e60150a77e2ef5eaf44c6b1ea2c"
+      },
+      {
+        "start": 52270,
+        "end": 56790,
+        "captions": 2,
+        "width": 1920,
+        "height": 1080,
+        "upscaled": false,
+        "bytes": 98216,
+        "sha256": "24d2e5be32fe1033c4cac571eed9a38081fd3abcdac8e8774ca9334912a89d18"
+      }
+    ]
+  },
+  "craft": {
+    "source_duration_ms": 16000,
+    "source_bytes": 77240,
+    "state": "ready",
+    "selector": "rules-1",
+    "first_s": 1.384,
+    "elapsed_s": 2.436,
+    "peak_rss_kib": 302944,
+    "observed_disk_growth_bytes": 250225,
+    "outputs": [
+      {
+        "start": 9300,
+        "end": 15900,
+        "captions": 0,
+        "width": 1920,
+        "height": 1080,
+        "upscaled": true,
+        "bytes": 57697,
+        "sha256": "08df6dc3d483002b8e7bb10659ff215ac88dbbecd6c501c76c276599dfb6b8fe"
+      },
+      {
+        "start": 1300,
+        "end": 7900,
+        "captions": 0,
+        "width": 1920,
+        "height": 1080,
+        "upscaled": true,
+        "bytes": 93283,
+        "sha256": "257b3c5e82ccd47e1e6b1328d48eafe6239c102a432b2b007c054e79c94710c9"
+      }
+    ]
+  },
+  "sport": {
+    "source_duration_ms": 16000,
+    "source_bytes": 504015,
+    "state": "ready",
+    "selector": "rules-1",
+    "first_s": 5.404,
+    "elapsed_s": 14.034,
+    "peak_rss_kib": 1007552,
+    "observed_disk_growth_bytes": 806851,
+    "outputs": [
+      {
+        "start": 8800,
+        "end": 15900,
+        "captions": 0,
+        "width": 3840,
+        "height": 2160,
+        "upscaled": false,
+        "bytes": 136530,
+        "sha256": "25280c2cf0477677d6c9329394963bf9b266fc0beadec46e0cb6cd9607fd3f3a"
+      },
+      {
+        "start": 800,
+        "end": 7900,
+        "captions": 0,
+        "width": 3840,
+        "height": 2160,
+        "upscaled": false,
+        "bytes": 133392,
+        "sha256": "6dfe8c1c1d915ab40973a2c844794eb88ffc5b51c5856487af73588a9472a807"
+      }
+    ]
+  },
+  "screencast": {
+    "source_duration_ms": 16000,
+    "source_bytes": 22145,
+    "state": "ready",
+    "selector": "rules-1",
+    "first_s": 1.374,
+    "elapsed_s": 2.417,
+    "peak_rss_kib": 311072,
+    "observed_disk_growth_bytes": 119812,
+    "outputs": [
+      {
+        "start": 1300,
+        "end": 7900,
+        "captions": 0,
+        "width": 1920,
+        "height": 1080,
+        "upscaled": true,
+        "bytes": 33399,
+        "sha256": "15563de75af65b1cfd74ae3a3fcf10a3fc45e88b7c15dd4024dc1f231c91cc98"
+      },
+      {
+        "start": 9300,
+        "end": 14900,
+        "captions": 0,
+        "width": 1920,
+        "height": 1080,
+        "upscaled": true,
+        "bytes": 30019,
+        "sha256": "41030276a32e510131fca0d1cb4b1434b9439c52fc328e38bd89c6b83116a7eb"
+      }
+    ]
+  },
+  "music": {
+    "source_duration_ms": 16000,
+    "source_bytes": 157510,
+    "state": "ready",
+    "selector": "rules-1",
+    "first_s": 2.961,
+    "elapsed_s": 4.308,
+    "peak_rss_kib": 321840,
+    "observed_disk_growth_bytes": 675650,
+    "outputs": [
+      {
+        "start": 800,
+        "end": 7400,
+        "captions": 0,
+        "width": 1920,
+        "height": 1080,
+        "upscaled": true,
+        "bytes": 110550,
+        "sha256": "6859c8df2d4ed4ce99694aaf51714bc698871a4847627268f669b666a083ff45"
+      },
+      {
+        "start": 8800,
+        "end": 15400,
+        "captions": 0,
+        "width": 1920,
+        "height": 1080,
+        "upscaled": true,
+        "bytes": 110591,
+        "sha256": "18e5a278e5b5d2fb755fcc33371c46cb19625164167b65b493a23648c9838b19"
+      }
+    ]
+  },
+  "mixed": {
+    "source_duration_ms": 16000,
+    "source_bytes": 101424,
+    "state": "ready",
+    "selector": "rules-1",
+    "first_s": 3.553,
+    "elapsed_s": 4.347,
+    "peak_rss_kib": 342432,
+    "observed_disk_growth_bytes": 625555,
+    "outputs": [
+      {
+        "start": 0,
+        "end": 8550,
+        "captions": 2,
+        "width": 1920,
+        "height": 1080,
+        "upscaled": true,
+        "bytes": 172784,
+        "sha256": "78b3b256bd0dc273ee8987c85f119f3a98faeea7491ed741eef4294616bc398b"
+      },
+      {
+        "start": 9300,
+        "end": 14900,
+        "captions": 0,
+        "width": 1920,
+        "height": 1080,
+        "upscaled": true,
+        "bytes": 32177,
+        "sha256": "9ec4cdce651f699d759dee0ca453426cc927afc12f05dbcb14ce141bcced06ec"
+      }
+    ]
+  }
+}

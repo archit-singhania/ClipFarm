@@ -1,0 +1,38 @@
+[
+  {
+    "id": "bunny",
+    "title": "Big Buck Bunny",
+    "credit": "(c) copyright 2008, Blender Foundation / www.bigbuckbunny.org",
+    "license_url": "https://creativecommons.org/licenses/by/3.0/",
+    "terms": "https://peach.blender.org/about/",
+    "film": {
+      "name": "bunny-film.zip",
+      "url": "https://download.blender.org/peach/bigbuckbunny_movies/BigBuckBunny_320x180.mp4.zip",
+      "member": "BigBuckBunny_320x180.mp4",
+      "sha256": "109e3ede8790bd633f374ca311d9cc61dce8d7f98f5b0797ca98199c9fbceedf"
+    },
+    "trailer": {
+      "name": "bunny-trailer.mp4",
+      "url": "https://media.w3.org/2010/05/bunny/trailer.mp4",
+      "sha256": "b2ded9ae5a20fa36ca8cec49ef923bffb5e1a51d9e8c1f8336273d2fa9d35ff0"
+    }
+  },
+  {
+    "id": "steel",
+    "title": "Tears of Steel",
+    "credit": "(CC) Blender Foundation | mango.blender.org",
+    "license_url": "https://creativecommons.org/licenses/by/3.0/",
+    "terms": "https://mango.blender.org/about/",
+    "film": {
+      "name": "steel-film.mov",
+      "url": "https://download.blender.org/demo/movies/ToS/tears_of_steel_720p.mov",
+      "sha256": "efa9062d9cdb7a338e40ad530dfdf234806743f29ae6a1a136b97ece4e588e8f"
+    },
+    "trailer": {
+      "name": "steel-trailer.zip",
+      "url": "https://download.blender.org/demo/movies/tears-of-steel_teaser.mp4.zip",
+      "member": "tears-of-steel_teaser.mp4",
+      "sha256": "f394ebe25189045de4ffccaaa0edee280dfd4993e4b118629474adb0548a7984"
+    }
+  }
+]

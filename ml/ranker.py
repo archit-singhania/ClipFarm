@@ -31,6 +31,8 @@ def grouped_rows(path):
     properties = {}
     for line in path.read_text().splitlines():
         row = json.loads(line)
+        if row.get("target", "human_acceptance") != "human_acceptance":
+            raise ValueError("The creator-acceptance model requires direct human ratings.")
         if (not row["rights"] or row["family"] not in FAMILIES or type(row["label"]) is not int
                 or not 0 <= row["label"] <= 3 or row["feature_version"] != FEATURE_VERSION
                 or len(row["features"]) != len(FEATURES)

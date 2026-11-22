@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-from . import imports, media, worker
+from . import feedback, imports, media, worker
 from .storage import ROOT, db, encode, execute, identifier, init, query
 from .upstream import format_seconds
 
@@ -30,22 +30,33 @@ def settings(values):
         raise ValueError("Select valid export settings.")
     options = DEFAULTS | {key: values[key] for key in DEFAULTS.keys() & values.keys()}
     if (options["ratio"] not in tuple(media.PRESETS) or options["quality"] not in ("HD", "UHD")
-            or options["framing"] not in ("fit", "crop") or type(options["count"]) is not int
+            or options["framing"] not in ("fit", "crop", "track") or type(options["count"]) is not int
             or not 1 <= options["count"] <= 8 or type(options["captions"]) is not bool):
         raise ValueError("Select valid export settings.")
+    selector = values.get("selector", "auto")
+    if selector not in ("auto", "editorial"):
+        raise ValueError("Select an available highlight model.")
+    if selector != "auto":
+        options["selector"] = selector
+    music_id = values.get("music_id")
+    if music_id is not None:
+        if not isinstance(music_id, str) or not TOKEN.fullmatch(music_id):
+            raise ValueError("Choose a soundtrack you uploaded.")
+        options["music_id"] = music_id
     return options
 
 
 class Handler(BaseHTTPRequestHandler):
     def dispatch(self):
+        self.cookie = False
         port = self.server.server_port
         host = self.headers.get("Host", "")
         if host not in {f"127.0.0.1:{port}", f"localhost:{port}"}:
-            return self.reply({"error": "Open the local Framefold address."}, 403)
+            return self.reply({"error": "Open the local ClipFarm address."}, 403)
         if self.command == "POST":
             origin = self.headers.get("Origin")
             if origin and origin != "http://" + host:
-                return self.reply({"error": "This action must come from Framefold."}, 403)
+                return self.reply({"error": "This action must come from ClipFarm."}, 403)
         cookies = SimpleCookie(self.headers.get("Cookie", ""))
         owner = cookies.get("framefold")
         self.owner = owner.value if owner and TOKEN.fullmatch(owner.value) else identifier()
@@ -55,7 +66,11 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if parts[0] == "api":
                 self.api(parts[1:])
-            elif self.command == "GET" and parts[0] in ("", "app.js", "style.css", "theme.js", "example.jpg"):
+            elif (self.command == "GET" and len(parts) == 2 and parts[0] == "fonts"
+                  and parts[1] in {"barlow-condensed-semibold.woff2", "dm-sans.woff2",
+                                   "OFL-BarlowCondensed.txt", "OFL-DMSans.txt"}):
+                self.file(WEB / "fonts" / parts[1])
+            elif self.command == "GET" and parts[0] in ("", "app.js", "style.css", "theme.js", "example.jpg", "surf-study.jpg"):
                 if len(parts) != 1:
                     raise LookupError
                 self.file(WEB / (parts[0] or "index.html"))
@@ -165,20 +180,33 @@ class Handler(BaseHTTPRequestHandler):
             result = imports.save(self.rfile, size, name, "upload", self.owner)
         self.reply(result, 201)
 
+    def export_options(self, values):
+        options = settings(values)
+        if "music_id" in options:
+            self.owned("SELECT id FROM music WHERE id=? AND owner=?", options["music_id"])
+        return encode(options)
+
+    def music(self):
+        if shutil.disk_usage(ROOT).free < 512 * 1024**2:
+            raise ValueError("Free at least 512 MB of disk space before importing music.")
+        size = int(self.headers.get("Content-Length", "0"))
+        name = Path(unquote(self.headers.get("X-File-Name", "Soundtrack"))).name
+        return self.reply(imports.save_music(self.rfile, size, name, self.owner), 201)
+
     def create(self):
         body = self.body()
         source = self.owned("SELECT * FROM sources WHERE id=? AND owner=?", body.get("source"))
         key = body.get("key")
         if not isinstance(key, str) or not 1 <= len(key) <= 100:
             raise ValueError("Generate requires an idempotency key.")
-        options = encode(settings(body.get("settings", {})))
+        options = self.export_options(body.get("settings", {}))
         run = identifier()
         with db() as connection:
             connection.execute("INSERT OR IGNORE INTO jobs (id,owner,source,request_key,settings) VALUES (?,?,?,?,?)",
                                (run, self.owner, source["id"], key, options))
             row = connection.execute("SELECT id,source,settings FROM jobs WHERE owner=? AND request_key=?",
                                      (self.owner, key)).fetchone()
-            if row["source"] != source["id"] or row["settings"] != options:
+            if row["source"] != source["id"] or encode(settings(json.loads(row["settings"]))) != options:
                 raise ValueError("This request key already belongs to another run.")
         self.reply({"id": row["id"]}, 202)
 
@@ -196,6 +224,14 @@ class Handler(BaseHTTPRequestHandler):
             clips = self.clips(uid)
             if action == "clips":
                 return self.reply(clips)
+            if action == "ratings":
+                rows = query("""SELECT ratings.record FROM ratings JOIN clips ON clips.id=ratings.clip
+                                WHERE clips.job=? ORDER BY clips.rank""", (uid,))
+                data = "".join(row["record"] + "\n" for row in rows).encode()
+                self.headers_for(200, "application/x-ndjson", len(data),
+                                 {"Content-Disposition": 'attachment; filename="clipfarm-ratings.jsonl"'})
+                self.wfile.write(data)
+                return
             if action == "preview":
                 return self.file(ROOT / uid / "preview.jpg")
             if action == "download":
@@ -203,7 +239,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not ready:
                     raise LookupError
                 with tempfile.TemporaryDirectory(dir=ROOT) as temporary:
-                    archive = Path(temporary) / "framefold-clips.zip"
+                    archive = Path(temporary) / "clipfarm-clips.zip"
                     with zipfile.ZipFile(archive, "w") as zipped:
                         for clip in ready:
                             for extension in ("mp4", "srt", "vtt"):
@@ -226,6 +262,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def clip_api(self, uid, action):
         clip = self.clip(uid)
+        if action == "rating":
+            if self.command == "GET":
+                return self.reply({"record": feedback.read(uid)})
+            return self.reply({"record": feedback.save(clip, self.body())})
         if self.command == "GET" and clip["state"] == "ready":
             extension = {"play": "mp4", "download": "mp4", "srt": "srt", "vtt": "vtt", "poster": "jpg"}.get(action)
             if extension:
@@ -247,7 +287,7 @@ class Handler(BaseHTTPRequestHandler):
                     if (type(start) is not int or type(end) is not int
                             or not 0 <= start < end <= duration or not 1000 <= end-start <= 90000):
                         raise ValueError("Choose a range of 1 to 90 seconds within the source.")
-                    options = encode(settings(json.loads(clip["options"]) | body.get("settings", {})))
+                    options = self.export_options(json.loads(clip["options"]) | body.get("settings", {}))
                     existing = connection.execute(
                         """SELECT id FROM clips WHERE parent=? AND start_ms=? AND end_ms=? AND options=?""",
                         (uid, start, end, options)).fetchone()
@@ -273,6 +313,8 @@ class Handler(BaseHTTPRequestHandler):
                     FROM jobs j JOIN sources s ON j.source=s.id WHERE j.owner=? ORDER BY j.created DESC LIMIT 50""",
                                         (self.owner,)))
         if self.command == "POST":
+            if parts == ["music"]:
+                return self.music()
             if parts == ["sources"]:
                 return self.source()
             if parts == ["jobs"]:
@@ -297,7 +339,7 @@ def main():
     with ThreadingHTTPServer(("127.0.0.1", args.port), Handler) as server:
         process = None if args.no_worker else subprocess.Popen([sys.executable, "-m", "framefold.worker"],
                                                               start_new_session=True)
-        print(f"Framefold · http://127.0.0.1:{server.server_port}", flush=True)
+        print(f"ClipFarm · http://127.0.0.1:{server.server_port}", flush=True)
         try:
             server.serve_forever()
         except KeyboardInterrupt:

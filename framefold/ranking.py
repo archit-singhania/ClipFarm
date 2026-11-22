@@ -26,23 +26,50 @@ def features(signals, candidate):
     ]
 
 
-def rank(signals, candidates):
-    """Always fall back to rules when a local model is absent or unusable."""
-    directory = os.environ.get("FRAMEFOLD_RANKER")
+def portable_score(trees, row):
+    """Evaluate finite numeric splits exported from a versioned LightGBM booster."""
+    total = 0.0
+    for node in trees:
+        while isinstance(node, list):
+            feature, threshold, left, right = node
+            node = left if row[feature] <= threshold else right
+        total += node
+    return total
+
+
+def rank(signals, candidates, selector=None):
+    """Apply an explicitly configured local ranker or use deterministic baseline scoring."""
+    directory = os.environ.get("CLIPFARM_RANKER", os.environ.get("FRAMEFOLD_RANKER"))
+    if selector == "editorial":
+        directory = "editorial"
+    elif selector == "rules":
+        directory = None
+    elif selector not in (None, "auto"):
+        raise ValueError("Choose a supported highlight selector.")
     if directory and candidates:
         try:
-            import lightgbm
-            import numpy as np
-            path = Path(directory)
+            bundled = directory == "editorial"
+            path = (Path(__file__).resolve().parents[1] / "ml" / "editorial" / "model"
+                    if bundled else Path(directory))
             metadata = json.loads((path / "model.json").read_text())
-            model = (path / "ranker.txt").read_text()
-            digest = hashlib.sha256(model.encode()).hexdigest()
+            model = (path / "ranker.txt").read_bytes()
+            digest = hashlib.sha256(model).hexdigest()
             if (metadata["feature_version"] != FEATURE_VERSION or tuple(metadata["features"]) != FEATURES
                     or metadata["model_sha256"] != digest):
                 raise ValueError("Model features or checksum do not match the runtime.")
-            booster = lightgbm.Booster(model_str=model)
-            scores = booster.predict(np.asarray([features(signals, row) for row in candidates]), num_threads=2)
+            rows = [features(signals, row) for row in candidates]
+            if bundled:
+                portable = (path / "trees.json").read_bytes()
+                if hashlib.sha256(portable).hexdigest() != metadata["trees_sha256"]:
+                    raise ValueError("Portable tree checksum does not match the model.")
+                trees = json.loads(portable)
+                scores = [portable_score(trees, row) for row in rows]
+            else:
+                import lightgbm
+                import numpy as np
+                booster = lightgbm.Booster(model_str=model.decode())
+                scores = booster.predict(np.asarray(rows), num_threads=2)
             return sorted(zip(candidates, scores), key=lambda result: (-result[1], result[0][0])), digest
-        except (ImportError, OSError, ValueError, KeyError, RuntimeError) as exc:
+        except (ImportError, OSError, ValueError, KeyError, RuntimeError, TypeError, IndexError) as exc:
             print(f"Using baseline selector: {exc}", flush=True)
-    return sorted(((row, row[2]) for row in candidates), key=lambda result: (-result[1], result[0][0])), "rules-1"
+    return sorted(((row, row[2]) for row in candidates), key=lambda result: (-result[1], result[0][0])), "rules-2"

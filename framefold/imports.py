@@ -8,7 +8,7 @@ import ssl
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit, unquote
 
-from .media import probe
+from .media import probe, probe_music
 from .storage import ROOT, db, encode, identifier
 
 LIMIT = 1024 ** 3
@@ -65,21 +65,8 @@ def save(stream, length, name, origin, owner):
     source_id = identifier()
     staging = ROOT / (source_id + ".upload")
     original = ROOT / (source_id + ".source")
-    digest = hashlib.sha256()
-    size = 0
     try:
-        with staging.open("xb") as target:
-            while length is None or size < length:
-                chunk = stream.read(min(1024 * 1024, length - size) if length is not None else 1024 * 1024)
-                if not chunk:
-                    break
-                size += len(chunk)
-                if size > LIMIT:
-                    raise ValueError("Choose a video smaller than 1 GB.")
-                target.write(chunk)
-                digest.update(chunk)
-        if length is not None and size != length:
-            raise ValueError("The transfer ended early. Try again.")
+        digest = stream_file(stream, length, staging, LIMIT)
         metadata = probe(staging)
         if not FORMATS.intersection(metadata["format"].split(",")):
             raise ValueError("Upload a self-contained MP4, MOV, WebM or MKV video.")
@@ -88,14 +75,54 @@ def save(stream, length, name, origin, owner):
         with db() as connection:
             result = connection.execute(
                 "INSERT OR IGNORE INTO sources VALUES (?,?,?,?,?,?)",
-                (source_id, owner, name[:160], digest.hexdigest(), encode(metadata), origin),
+                (source_id, owner, name[:160], digest, encode(metadata), origin),
             )
             if result.rowcount:
                 os.replace(staging, original)
             else:
                 source_id = connection.execute(
-                    "SELECT id FROM sources WHERE owner=? AND digest=?", (owner, digest.hexdigest())
+                    "SELECT id FROM sources WHERE owner=? AND digest=?", (owner, digest)
                 ).fetchone()[0]
         return {"id": source_id, "name": name, **metadata}
+    finally:
+        staging.unlink(missing_ok=True)
+
+
+def stream_file(stream, length, staging, limit):
+    digest = hashlib.sha256()
+    size = 0
+    with staging.open("xb") as target:
+        while length is None or size < length:
+            chunk = stream.read(min(1024 * 1024, length - size) if length is not None else 1024 * 1024)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > limit:
+                raise ValueError("The upload exceeds the size limit.")
+            target.write(chunk)
+            digest.update(chunk)
+    if length is not None and size != length:
+        raise ValueError("The transfer ended early. Try again.")
+    return digest.hexdigest()
+
+
+def save_music(stream, length, name, owner):
+    limit = 128 * 1024**2
+    if not 0 < length <= limit:
+        raise ValueError("Choose a soundtrack up to 128 MB.")
+    uid = identifier()
+    staging = ROOT / (uid + ".upload")
+    try:
+        digest = stream_file(stream, length, staging, limit)
+        duration = probe_music(staging)
+        with db() as connection:
+            created = connection.execute("INSERT OR IGNORE INTO music "
+                                         "(id,owner,name,digest,duration_ms,created) VALUES (?,?,?,?,?,CURRENT_TIMESTAMP)",
+                                         (uid, owner, name[:160], digest, duration))
+            if created.rowcount:
+                staging.replace(ROOT / (uid + ".music"))
+            row = connection.execute("SELECT id,name,duration_ms FROM music WHERE owner=? AND digest=?",
+                                     (owner, digest)).fetchone()
+        return dict(row)
     finally:
         staging.unlink(missing_ok=True)

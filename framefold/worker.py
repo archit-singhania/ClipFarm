@@ -64,7 +64,7 @@ def process(job):
         if cancelled(job):
             return
         if job["stage"] < 3:
-            picks, selector = media.select(result, info["duration_ms"], settings["count"])
+            picks, selector = media.select(result, info["duration_ms"], settings["count"], settings.get("selector"))
             with db() as connection:
                 connection.executemany(
                     "INSERT INTO clips (id,job,rank,start_ms,end_ms,reason,options) VALUES (?,?,?,?,?,?,?)",
@@ -125,12 +125,20 @@ def serve():
             raise SystemExit("The worker is already running for this data directory.")
         for temporary in ROOT.glob("*/*.tmp.mp4"):
             temporary.unlink(missing_ok=True)
+        next_cleanup = 0
         while True:
             jobs = query("""SELECT jobs.*,sources.metadata FROM jobs JOIN sources ON sources.id=jobs.source
                           WHERE jobs.state IN ('queued','running') ORDER BY jobs.created LIMIT 1""")
             if jobs:
                 process(jobs[0])
             else:
+                if os.environ.get("CLIPFARM_RETENTION_DAYS") and time.monotonic() >= next_cleanup:
+                    from .retention import sweep
+                    next_cleanup = time.monotonic() + 3600
+                    try:
+                        sweep()
+                    except (ValueError, OSError) as exc:
+                        print(f"Retention cleanup deferred: {exc}", flush=True)
                 time.sleep(0.6)
 
 

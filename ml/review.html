@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClipFarm · Candidate review</title>
+<style>
+:root { color-scheme: dark; font: 16px/1.5 system-ui, sans-serif; color: #fbf4e8; background: #2b282f; }
+main { max-width: 54rem; margin: 2rem auto; padding: 0 1rem; }
+video { display: block; width: 100%; max-height: 53vh; background: #17151b; }
+button, input { font: inherit; padding: .55rem .8rem; min-height: 44px; }
+button { border: 1px solid #a297ae; border-radius: .3rem; background: #3b3640; color: inherit; cursor: pointer; }
+button:focus-visible, input:focus-visible { outline: 3px solid #fabb47; }
+button[aria-pressed="true"] { background: #fabb47; color: #2b282f; }
+.controls { display: flex; gap: .5rem; flex-wrap: wrap; margin: 1rem 0; }
+</style>
+<main>
+<h1>ClipFarm candidate review</h1>
+<p id="progress" aria-live="polite"></p>
+<video controls preload="metadata" src="{{VIDEO}}"></video>
+<div class="controls"><button id="back">Previous</button><button id="play">Play candidate</button><button id="forward">Next</button></div>
+<fieldset><legend>Would you publish this moment?</legend>
+<div class="controls" id="ratings">
+  <button data-score="0">0 · Unusable</button><button data-score="1">1 · Missing context</button>
+  <button data-score="2">2 · Usable</button><button data-score="3">3 · Strong</button>
+</div></fieldset>
+<p><label>Reviewer ID <input id="reviewer" required maxlength="80" placeholder="Local alias"></label></p>
+<button id="save">Download judgments</button><p id="status" role="status"></p>
+</main>
+<script type="application/json" id="rows">{{ROWS}}</script>
+<script>
+const rows = JSON.parse(document.querySelector("#rows").textContent);
+const grades = new Array(rows.length).fill(null);
+const video = document.querySelector("video");
+let index = 0;
+function show() {
+  const row = rows[index];
+  video.pause();
+  if (video.readyState) video.currentTime = row.start_ms / 1000;
+  document.querySelector("#progress").textContent =
+    row.source + " · Candidate " + (index + 1) + " of " + rows.length +
+    " · " + (row.start_ms / 1000) + "–" + (row.end_ms / 1000) + " seconds";
+  document.querySelector("#back").disabled = index === 0;
+  document.querySelector("#forward").disabled = index === rows.length-1;
+  for (const button of document.querySelectorAll("[data-score]")) {
+    button.setAttribute("aria-pressed", Number(button.dataset.score) === grades[index]);
+  }
+}
+document.querySelector("#play").onclick = () => {
+  video.currentTime = rows[index].start_ms / 1000;
+  video.play().catch(() => {document.querySelector("#status").textContent = "Open the review page beside its original video.";});
+};
+video.addEventListener("loadedmetadata", show);
+video.addEventListener("timeupdate", () => {
+  if (video.currentTime >= rows[index].end_ms / 1000) video.pause();
+});
+document.querySelector("#back").onclick = () => { index--; show(); };
+document.querySelector("#forward").onclick = () => { index++; show(); };
+for (const button of document.querySelectorAll("[data-score]")) button.onclick = () => {
+  grades[index] = Number(button.dataset.score);
+  if (index < rows.length-1) index++;
+  show();
+  document.querySelector("#status").textContent = grades.filter(grade => grade !== null).length + " candidates reviewed.";
+};
+document.querySelector("#save").onclick = () => {
+  const reviewer = document.querySelector("#reviewer");
+  if (!reviewer.reportValidity()) return;
+  const labeled = rows.flatMap((row,i) => grades[i] === null ? [] :
+    [{...row, label: grades[i], target: "human_acceptance", reviewer: reviewer.value}]);
+  if (!labeled.length) {
+    document.querySelector("#status").textContent = "Rate at least one candidate first.";
+    return;
+  }
+  const url = URL.createObjectURL(new Blob([labeled.map(row => JSON.stringify(row)).join("\n")+"\n"],{type:"application/x-ndjson"}));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "clipfarm-judgments.jsonl";
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
+show();
+</script>
+</html>

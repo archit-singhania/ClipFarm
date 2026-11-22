@@ -26,11 +26,23 @@ For example, a shot where the ball enters the goal with no buildup can receive a
 ```sh
 python3 -m pip install -r ml/requirements.txt
 python3 -m ml.ranker train labeled-candidates.jsonl data/ranker
-FRAMEFOLD_RANKER=data/ranker python3 -m framefold.server
+CLIPFARM_RANKER=data/ranker python3 -m framefold.server
 ```
 
 The training command stratifies by family and partitions duplicate groups before constructing source-plus-brief ranking queries. It saves the model, feature schema, seed, split assignments, dataset and model checksums, baseline and ranker nDCG@3, human acceptance among the top three, and the count of held-out queries with an accepted pick. Close off the test labels during feature development and use a separate independent set before making a public performance claim. Freeze the dataset and split manifest for each comparison.
 
-## Model status
+## Review candidates locally
 
-No rights-cleared, human-annotated production corpus was supplied. The local app uses the rules selector unless a compatible trained model is explicitly configured. There are no production per-family metrics or published weights. The baseline can miss quiet actions, rapid back-to-back events, and semantically important speech without a pause or sentence boundary. It can also score camera motion and edits as action. The optional ranker inherits the proposal stage's coverage limits.
+After exporting one source's candidate JSONL, create a local review page beside the source. The page plays each candidate's time range and collects a 0–3 creator rating. It reveals the range and source name while hiding the model score. Download the judgments before closing the page. The command preserves the original media.
+
+```sh
+python3 -m ml.review labels-source.jsonl original.mp4 review.html
+```
+
+Open the generated HTML file locally. Combine reviewed originals into one JSONL and use the training command above. Adjudicate multiple reviewers' scores for the same source and range before training. Keep ratings from the held-out source groups independent of feature or threshold decisions.
+
+## Bundled film model
+
+The Film trailer pilot uses real source footage and frame matches with human-edited teasers from Blender's open movie projects. The weights, training rows, provenance, held-out results and reproducible commands are in the [model card](editorial/MODEL_CARD.md). The portable scorer uses standard Python at runtime. Select the film option on a run or set `CLIPFARM_RANKER=editorial` for an operator default. An explicit rules choice overrides that environment setting.
+
+A broader model still needs direct creator evaluations of complete clips across content families. The baseline can miss quiet actions, adjacent events, and meaningful speech without a pause. Camera motion and edits can also resemble action. The film ranker inherits the same candidate coverage.

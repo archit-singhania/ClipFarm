@@ -1,18 +1,23 @@
 """Local persistence for sources, runs and immutable clip revisions."""
 import contextlib
 import json
-import os
 import sqlite3
 import uuid
 from pathlib import Path
 
-ROOT = Path(os.environ.get("FRAMEFOLD_DATA", "data")).resolve()
+from .config import setting
+
+ROOT = Path(setting("DATA", "data")).resolve()
 ROOT.mkdir(mode=0o700, parents=True, exist_ok=True)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sources (
  id TEXT PRIMARY KEY, owner TEXT NOT NULL, name TEXT NOT NULL, digest TEXT NOT NULL,
  metadata TEXT NOT NULL, origin TEXT NOT NULL, UNIQUE(owner,digest)
+);
+CREATE TABLE IF NOT EXISTS music (
+ id TEXT PRIMARY KEY, owner TEXT NOT NULL, name TEXT NOT NULL, digest TEXT NOT NULL,
+ duration_ms INTEGER NOT NULL, created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(owner,digest)
 );
 CREATE TABLE IF NOT EXISTS jobs (
  id TEXT PRIMARY KEY, owner TEXT NOT NULL, source TEXT NOT NULL REFERENCES sources(id),
@@ -25,6 +30,9 @@ CREATE TABLE IF NOT EXISTS clips (
  start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, reason TEXT NOT NULL,
  options TEXT NOT NULL, parent TEXT REFERENCES clips(id), state TEXT NOT NULL DEFAULT 'queued',
  artifact TEXT, error TEXT
+);
+CREATE TABLE IF NOT EXISTS ratings (
+ clip TEXT PRIMARY KEY REFERENCES clips(id) ON DELETE CASCADE, record TEXT NOT NULL
 );
 """
 
@@ -45,6 +53,10 @@ def init():
         connection.execute("PRAGMA journal_mode=WAL")
         connection.executescript(SCHEMA)
         connection.execute("BEGIN IMMEDIATE")
+        music_columns = {row["name"] for row in connection.execute("PRAGMA table_info(music)")}
+        if "created" not in music_columns:
+            connection.execute("ALTER TABLE music ADD COLUMN created TEXT")
+            connection.execute("UPDATE music SET created=CURRENT_TIMESTAMP WHERE created IS NULL")
         columns = {row["name"] for row in connection.execute("PRAGMA table_info(jobs)")}
         if "selector" not in columns:
             connection.execute("ALTER TABLE jobs ADD COLUMN selector TEXT NOT NULL DEFAULT 'rules-1'")

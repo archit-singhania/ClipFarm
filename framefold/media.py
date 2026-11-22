@@ -3,23 +3,28 @@ import array
 import hashlib
 import json
 import math
-import os
 import re
 import statistics
 import subprocess
 import tempfile
 from pathlib import Path
 
+from .config import setting
+
 from .captions import overlay_inputs
 from .ranking import rank
+from .tracking import GRID_H, GRID_W, SAMPLE_FPS, tracking_filter
 from .upstream import METADATA_SCRUB
 
-FFMPEG = os.environ.get("FRAMEFOLD_FFMPEG", "ffmpeg")
-FFPROBE = os.environ.get("FRAMEFOLD_FFPROBE", "ffprobe")
-INPUT = ["-protocol_whitelist", "file", "-enable_drefs", "0"]
+FFMPEG = setting("FFMPEG", "ffmpeg")
+FFPROBE = setting("FFPROBE", "ffprobe")
+# FFmpeg's MOV demuxer disables external data references by default. Supplying
+# its private option explicitly prevents other supported demuxers from opening.
+INPUT = ["-protocol_whitelist", "file"]
 PRESETS = {"9:16": (1080, 1920), "16:9": (1920, 1080), "1:1": (1080, 1080),
            "4:5": (1080, 1350), "3:4": (1080, 1440)}
-VERSION = "rules-1/ffmpeg-1"
+VERSION = "windows-2/ffmpeg-2"
+MUSIC_FORMATS = "mov,mp3,wav,aiff,flac,ogg,matroska,webm,aac"
 
 
 def command(args, timeout=120, cwd=None):
@@ -60,21 +65,44 @@ def probe(path, restricted=True):
             "audio": any(s["codec_type"] == "audio" for s in data["streams"])}
 
 
-def ffmpeg(source, *args, **kwargs):
+def probe_music(path):
+    data = json.loads(command([FFPROBE, "-v", "error", *INPUT, "-format_whitelist", MUSIC_FORMATS,
+                              "-show_streams", "-show_format", "-of", "json", str(path)], timeout=30))
+    duration = float(data["format"].get("duration", 0))
+    if not any(s["codec_type"] == "audio" for s in data["streams"]):
+        raise ValueError("Choose a soundtrack containing an audio stream.")
+    if not 0.2 <= duration <= 3600:
+        raise ValueError("Choose a soundtrack between 0.2 seconds and one hour.")
+    return round(duration * 1000)
+
+
+def ffmpeg(source, *args, seek=None, **kwargs):
+    seek_args = ["-ss", str(seek)] if seek is not None else []
     return command([FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
-                    "-threads", "2", "-filter_threads", "2", *INPUT, "-i", str(source), *args], **kwargs)
+                    "-threads", "2", "-filter_threads", "2", *INPUT, *seek_args, "-i", str(source), *args], **kwargs)
 
 
-def analyze(source, metadata, directory):
+def analyze(source, metadata, directory, *, transcribe=True):
     frames = ffmpeg(source, "-map", f"0:{metadata['video_index']}", "-an", "-vf",
                     "fps=2,scale=32:24,format=gray", "-f", "rawvideo", "-", timeout=600)
     size = 32 * 24
     fingerprints = []
     motion = [0.0]
+    motion_cues = [0.0]
     for offset in range(size, len(frames), size):
-        motion.append(sum(abs(a - b) for a, b in zip(
-            frames[offset-size:offset], frames[offset:offset+size]
-        )) / size)
+        delta = [abs(a-b) for a, b in zip(frames[offset-size:offset], frames[offset:offset+size])]
+        global_change = sum(delta) / size
+        motion.append(global_change)
+        cue = global_change
+        if .35 <= global_change < 2.2:
+            # A moving handle or fold may occupy only a few image blocks.
+            # Require several changed blocks to reject isolated quantization flicker.
+            blocks = [sum(sum(delta[row*32+x:row*32+x+4]) for row in range(y, y+4))/16
+                      for y in range(0, 24, 4) for x in range(0, 32, 4)]
+            local = statistics.mean(sorted(blocks, reverse=True)[:3])
+            if local >= 8:
+                cue = max(2.2, min(5.0, local / 4))
+        motion_cues.append(cue)
     for offset in range(0, len(frames), size):
         frame = frames[offset:offset+size]
         # Eight by six spatial bins preserve composition while tolerating resize.
@@ -86,9 +114,9 @@ def analyze(source, metadata, directory):
         pcm = array.array("h", samples)
         energy = [math.sqrt(statistics.mean(value * value for value in pcm[i:i+1000]))
                   for i in range(0, len(pcm), 1000)]
-        if max(energy, default=0) > 160:
+        if transcribe and max(energy, default=0) > 160:
             cached = directory.parent / "models" / "ggml-tiny.en.bin"
-            model = Path(os.environ.get("FRAMEFOLD_WHISPER_MODEL", cached)).expanduser().resolve()
+            model = Path(setting("WHISPER_MODEL", cached)).expanduser().resolve()
             if model.is_file():
                 wav = directory / "speech.wav"
                 ffmpeg(source, "-vn", "-ar", "16000", "-ac", "1", str(wav), timeout=600)
@@ -105,7 +133,7 @@ def analyze(source, metadata, directory):
                     prefix.with_suffix(".json").unlink(missing_ok=True)
             else:
                 notice = "Audio is present. Set up a local speech model and start a new run to generate captions."
-    return {"motion": motion, "energy": energy, "speech": speech, "notice": notice, "fingerprints": fingerprints}
+    return {"motion": motion, "motion_cues": motion_cues, "energy": energy, "speech": speech, "notice": notice, "fingerprints": fingerprints}
 
 
 def propose(signals, duration):
@@ -129,7 +157,7 @@ def propose(signals, duration):
     ]:
         if kind == "energy" and signals["speech"]:
             continue
-        values = signals[kind]
+        values = signals.get("motion_cues", signals[kind]) if kind == "motion" else signals[kind]
         active = [i for i, value in enumerate(values) if value >= threshold]
         groups = []
         for index in active:
@@ -160,12 +188,16 @@ def repeated_scene(signals, left, right):
                 for fraction in (.25, .45, .65, .8)]
 
     a, b = signature(*left), signature(*right)
-    return statistics.mean(abs(x-y) for first, second in zip(a, b) for x, y in zip(first, second)) < 5
+    differences = [sorted((abs(x-y) for x, y in zip(first, second)), reverse=True)
+                   for first, second in zip(a, b)]
+    # Distant picks can share a nearly static backdrop while differing locally.
+    return (statistics.mean(v for row in differences for v in row) < 5
+            and statistics.mean(v for row in differences for v in row[:3]) < 8)
 
 
-def select(signals, duration, count):
+def select(signals, duration, count, selector=None):
     """Rank and deduplicate windows before assigning stable pick numbers."""
-    ordered, version = rank(signals, propose(signals, duration))
+    ordered, version = rank(signals, propose(signals, duration), selector)
     picks = []
     for (start, end, _, reason), score in ordered:
         if any(
@@ -194,6 +226,35 @@ def timestamp(ms, separator):
     return f"{hour:02}:{minute:02}:{second:02}{separator}{fraction:03}"
 
 
+def frame_filters(source, metadata, start, duration, width, height, framing, temporary):
+    if framing == "track":
+        frames = ffmpeg(source, "-t", str(duration), "-map", f"0:{metadata['video_index']}", "-an",
+                        "-vf", f"fps={SAMPLE_FPS},scale={GRID_W}:{GRID_H},format=gray",
+                        "-f", "rawvideo", "-", seek=start/1000, timeout=300)
+        tracked = tracking_filter(frames, metadata["width"], metadata["height"], width, height, temporary)
+        if tracked:
+            return "track", tracked
+        framing = "fit"
+    direction = "increase" if framing == "crop" else "decrease"
+    filters = f"scale={width}:{height}:force_original_aspect_ratio={direction}:force_divisible_by=2"
+    filters += f",crop={width}:{height}" if framing == "crop" else f",pad={width}:{height}:(ow-iw)/2:(oh-ih)/2"
+    return framing, filters
+
+
+def mix_filters(track_index, duration, source_audio):
+    common = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo"
+    bed = (f"[{track_index}:a:0]{common},atrim=duration={duration},asetpts=PTS-STARTPTS,"
+           f"volume=0.24,afade=t=in:d=0.10,afade=t=out:st={max(0,duration-.25)}:d=0.25")
+    if not source_audio:
+        return [bed + "[mix]"]
+    return [
+        bed + "[bed]",
+        f"[0:a:0]{common},apad,atrim=duration={duration},asplit[original][key]",
+        "[bed][key]sidechaincompress=threshold=.025:ratio=10:attack=10:release=300[ducked]",
+        "[original][ducked]amix=inputs=2:normalize=0:duration=longest,alimiter=limit=.96:level=0:latency=1[mix]",
+    ]
+
+
 def render(source, metadata, clip, directory, speech):
     options = json.loads(clip["options"])
     width, height = PRESETS[options["ratio"]]
@@ -212,47 +273,54 @@ def render(source, metadata, clip, directory, speech):
             destination.with_suffix("." + suffix).write_text(("WEBVTT\n\n" if suffix == "vtt" else "") + body)
         else:
             destination.with_suffix("." + suffix).unlink(missing_ok=True)
-    crop = options["framing"] == "crop"
-    direction = "increase" if crop else "decrease"
-    filters = f"scale={width}:{height}:force_original_aspect_ratio={direction}:force_divisible_by=2"
-    filters += f",crop={width}:{height}" if crop else f",pad={width}:{height}:(ow-iw)/2:(oh-ih)/2"
-    filters += ",setsar=1,fps=30"
+    music_id = options.get("music_id")
     try:
-        with tempfile.TemporaryDirectory(dir=directory, prefix="captions-") as temporary:
+        with tempfile.TemporaryDirectory(dir=directory, prefix="render-") as runtime:
+            temporary = Path(runtime)
+            framing, filters = frame_filters(source, metadata, start, duration, width, height,
+                                             options["framing"], temporary)
             extra_inputs = []
-            mapping = ["-map", f"0:{metadata['video_index']}", "-vf", filters]
+            graph = []
+            video = f"[0:{metadata['video_index']}]{filters},setsar=1,fps=30"
+            next_input = 1
             if cues:
                 available = command([FFMPEG, "-hide_banner", "-filters"])
                 if re.search(rb"\bsubtitles\s+V->V", available):
-                    # Shift the cue timestamps to the source clock because output seek follows filters.
-                    absolute = Path(temporary) / "source.srt"
-                    absolute.write_text("\n".join(
-                        f"{i}\n{timestamp(a+start, ',')} --> {timestamp(b+start, ',')}\n{t}\n"
-                        for i, (a, b, t) in enumerate(cues, 1)
-                    ))
-                    relative = absolute.relative_to(directory)
-                    mapping[-1] += f",subtitles={relative}:force_style='Alignment=2,MarginV=36,FontSize=18,Outline=2'"
+                    srt = destination.with_suffix(".srt").name
+                    video += f",subtitles={srt}:force_style='Alignment=2,MarginV=36,FontSize=18,Outline=2'"
                 else:
-                    extra_inputs = overlay_inputs([(a+start, b+start, text) for a, b, text in cues],
-                                                  Path(temporary), width, height, end/1000)
-                    graph = (f"[0:{metadata['video_index']}]{filters}[base];"
-                             f"[base][1:v]overlay=x=0:y=H-h-{round(height*.075)}:eof_action=pass[out]")
-                    mapping = ["-filter_complex_threads", "2", "-filter_complex", graph, "-map", "[out]"]
-            ffmpeg(source, *extra_inputs, "-ss", str(start/1000), "-t", str(duration), *mapping,
-                   "-map", "0:a:0?", "-c:v", "libx264", "-threads", "4", "-preset", "veryfast",
+                    extra_inputs.extend(overlay_inputs(cues, temporary, width, height, duration))
+                    graph.append(video + "[base]")
+                    video = f"[base][1:v]overlay=x=0:y=H-h-{round(height*.075)}:eof_action=pass"
+                    next_input += 1
+            graph.append(video + "[out]")
+            audio_map = "0:a:0?"
+            if music_id:
+                # The identifier is validated and owner-scoped by the control API.
+                if not re.fullmatch(r"[a-f0-9]{32}", music_id):
+                    raise ValueError("Invalid soundtrack.")
+                track = directory.parent / (music_id + ".music")
+                extra_inputs.extend(["-stream_loop", "-1", *INPUT, "-format_whitelist", MUSIC_FORMATS,
+                                     "-i", str(track)])
+                graph.extend(mix_filters(next_input, duration, metadata["audio"]))
+                audio_map = "[mix]"
+            ffmpeg(source, *extra_inputs, "-t", str(duration), "-filter_complex_threads", "2",
+                   "-filter_complex", ";".join(graph), "-map", "[out]", "-map", audio_map,
+                   "-c:v", "libx264", "-threads", "4", "-preset", "veryfast",
                    "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", *METADATA_SCRUB,
-                   "-movflags", "+faststart", str(staging), cwd=directory, timeout=1800)
+                   "-movflags", "+faststart", str(staging), seek=start/1000, cwd=directory, timeout=1800)
         actual = probe(staging)
         if (actual["width"], actual["height"], actual["codec"]) != (width, height, "h264"):
             raise ValueError("The rendered file does not match the export preset.")
-        if abs(actual["duration_ms"] - (end-start)) > 250 or actual["audio"] != metadata["audio"]:
+        if abs(actual["duration_ms"] - (end-start)) > 250 or actual["audio"] != (metadata["audio"] or bool(music_id)):
             raise ValueError("The rendered timing or audio failed verification.")
         ffmpeg(staging, "-map", "0:v:0", "-frames:v", "1", "-f", "null", "-", timeout=30)
         with staging.open("rb") as handle:
             digest = hashlib.file_digest(handle, "sha256").hexdigest()
         actual.update(bytes=staging.stat().st_size, sha256=digest, captions=len(cues),
                       caption_bounds_ms=[cues[0][0], cues[-1][1]] if cues else None,
-                      upscale=(max if crop else min)(width/metadata["width"], height/metadata["height"]) > 1,
+                      framing_applied=framing, soundtrack=bool(music_id),
+                      upscale=(min if framing == "fit" else max)(width/metadata["width"], height/metadata["height"]) > 1,
                       verified=True, version=VERSION)
         thumbnail = destination.with_suffix(".jpg")
         try:

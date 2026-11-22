@@ -1,0 +1,146 @@
+{
+  "tutorial": {
+    "source_sha256": "5498faafd31a23ee36d83c35eef9a1a3c9450a64403fba46ff4b7902fc1981f3",
+    "range_s": [
+      50,
+      56
+    ],
+    "openshorts": {
+      "seconds": 0.849,
+      "bytes": 86222,
+      "duration_s": 6.0,
+      "tracks": [
+        "h264",
+        "aac"
+      ]
+    },
+    "clipping": {
+      "seconds": 1.184,
+      "bytes": 81395,
+      "duration_s": 6.0,
+      "tracks": [
+        "h264",
+        "aac"
+      ]
+    }
+  },
+  "craft": {
+    "source_sha256": "f3bb375fbe362fab1ed5bf5e7b18aef259a2c798a36275c1a328bbec34237aad",
+    "range_s": [
+      2,
+      6
+    ],
+    "openshorts": {
+      "seconds": 0.138,
+      "bytes": 21911,
+      "duration_s": 4.0,
+      "tracks": [
+        "h264"
+      ]
+    },
+    "clipping": {
+      "seconds": 0.115,
+      "bytes": 16808,
+      "duration_s": 4.0,
+      "tracks": [
+        "h264"
+      ]
+    }
+  },
+  "sport": {
+    "source_sha256": "79ab12713bc2efe9ac7870ccfb3c380d3c30ca1ea7f979e59094a2b589e533e0",
+    "range_s": [
+      1,
+      5
+    ],
+    "openshorts": {
+      "seconds": 1.487,
+      "bytes": 79226,
+      "duration_s": 4.0,
+      "tracks": [
+        "h264"
+      ]
+    },
+    "clipping": {
+      "seconds": 2.291,
+      "bytes": 68930,
+      "duration_s": 4.0,
+      "tracks": [
+        "h264"
+      ]
+    }
+  },
+  "screencast": {
+    "source_sha256": "9000d5b409d83bb19f3095d8d77da9047df1bbc928b35b4c0a9446e27006e64a",
+    "range_s": [
+      2,
+      6
+    ],
+    "openshorts": {
+      "seconds": 0.109,
+      "bytes": 7321,
+      "duration_s": 4.0,
+      "tracks": [
+        "h264"
+      ]
+    },
+    "clipping": {
+      "seconds": 0.085,
+      "bytes": 8294,
+      "duration_s": 4.0,
+      "tracks": [
+        "h264"
+      ]
+    }
+  },
+  "music": {
+    "source_sha256": "21bdb745525b2ecc7cc05697355f6d8d4046a8f076b4b95ce89f9d8df337e97b",
+    "range_s": [
+      2,
+      6
+    ],
+    "openshorts": {
+      "seconds": 0.278,
+      "bytes": 56530,
+      "duration_s": 4.0,
+      "tracks": [
+        "h264",
+        "aac"
+      ]
+    },
+    "clipping": {
+      "seconds": 0.121,
+      "bytes": 57234,
+      "duration_s": 4.0,
+      "tracks": [
+        "h264",
+        "aac"
+      ]
+    }
+  },
+  "mixed": {
+    "source_sha256": "c8e48bf619cec6a000307578cbc5568c316a6aa28b28958cbc2d7f0e3a40db31",
+    "range_s": [
+      2,
+      6
+    ],
+    "openshorts": {
+      "seconds": 0.251,
+      "bytes": 44638,
+      "duration_s": 4.0,
+      "tracks": [
+        "h264",
+        "aac"
+      ]
+    },
+    "clipping": {
+      "seconds": 0.094,
+      "bytes": 46426,
+      "duration_s": 4.0,
+      "tracks": [
+        "h264",
+        "aac"
+      ]
+    }
+  }
+}

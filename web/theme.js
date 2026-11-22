@@ -1,17 +1,21 @@
 (() => {
   const choices = ["charcoal", "forest", "navy"];
-  window.framefoldTheme = (value, save = false) => {
+  window.clipFarmTheme = (value, save = false) => {
     const theme = choices.includes(value) ? value : "charcoal";
     document.documentElement.dataset.theme = theme;
     const radio = document.querySelector(`input[name="theme"][value="${theme}"]`);
     if (radio) radio.checked = true;
     if (save) {
-      try { localStorage.setItem("framefold-theme", theme); } catch {}
+      try { localStorage.setItem("clipfarm-theme", theme); } catch {}
     }
   };
-  try { window.framefoldTheme(localStorage.getItem("framefold-theme")); } catch {}
+
+  try {
+    const saved = localStorage.getItem("clipfarm-theme") || localStorage.getItem("framefold-theme");
+    window.clipFarmTheme(saved, Boolean(saved));
+  } catch {}
   addEventListener("storage", event => {
-    if (event.key === "framefold-theme" || event.key === null) window.framefoldTheme(event.newValue);
+    if (event.key === "clipfarm-theme" || event.key === null) window.clipFarmTheme(event.newValue);
   });
 })();
 
@@ -24,9 +28,9 @@ addEventListener("DOMContentLoaded", () => {
     if (open) picker.querySelector(":checked")?.focus();
     else if (focus) themeButton.focus();
   }
-  window.framefoldTheme(document.documentElement.dataset.theme);
+  window.clipFarmTheme(document.documentElement.dataset.theme);
   themeButton.addEventListener("click", () => showTheme(picker.hidden, true));
-  picker.addEventListener("change", event => window.framefoldTheme(event.target.value, true));
+  picker.addEventListener("change", event => window.clipFarmTheme(event.target.value, true));
   document.addEventListener("keydown", event => {
     if (event.key === "Escape" && !picker.hidden) showTheme(false, true);
   });

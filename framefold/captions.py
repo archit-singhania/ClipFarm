@@ -1,6 +1,7 @@
 """Portable burned captions for FFmpeg builds without the libass filter."""
-import os
 import textwrap
+
+from .config import setting
 
 
 def overlay_inputs(cues, directory, width, height, duration):
@@ -8,7 +9,7 @@ def overlay_inputs(cues, directory, width, height, duration):
         from PIL import Image, ImageDraw, ImageFont
     except ImportError as exc:
         raise ValueError("Install Pillow or use an FFmpeg build with the subtitles filter, then retry.") from exc
-    font_path = os.environ.get("FRAMEFOLD_CAPTION_FONT")
+    font_path = setting("CAPTION_FONT")
     font_size = round(min(width, height) * .047)
     try:
         font = ImageFont.truetype(font_path or "DejaVuSans.ttf", font_size)
