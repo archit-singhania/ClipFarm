@@ -17,6 +17,8 @@ python -m clipfarm
 
 Open [ClipFarm locally](http://127.0.0.1:8765). The server starts a separate worker and writes private data under `data/`. To run the worker separately, use `python -m framefold.server --no-worker` and `python -m framefold.worker`. Both processes must use the same working directory or `CLIPFARM_DATA`. Use the same browser profile and localhost address to reopen previous runs.
 
+Select **Theme** in the header to change the workspace palette. The five dark options are Charcoal, Oxblood, Petrol, Ultraviolet and Ember. The five light options are Forest, Navy, Porcelain, Matcha and Rosé. Your browser remembers the selection and applies it across open ClipFarm tabs on the same site.
+
 ### Enable keyless speech captions
 
 Install [whisper.cpp](https://github.com/ggml-org/whisper.cpp) so `whisper-cli` is on PATH. Put the English tiny weights at `data/models/ggml-tiny.en.bin`, or set `CLIPFARM_WHISPER_MODEL` to an absolute path for a compatible local model. The service uses these files offline. A multilingual model is needed for multilingual transcription. When a model is missing, the app can still select visual/audio candidates and displays a caption setup message. Sources without audio skip speech recognition.

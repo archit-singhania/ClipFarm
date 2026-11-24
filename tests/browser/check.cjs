@@ -180,51 +180,90 @@ async function run() {
       ["recovery", "#/runs/" + staticId, "#run-status:not([hidden])"],
     ];
     const violations = [];
-    let checked = 0;
-    for (const theme of ["charcoal", "forest", "navy"]) {
-      await page.locator("#theme-button").click();
-      const radio = page.locator('input[value="' + theme + '"]');
-      await radio.check();
-      await radio.press("Escape");
-      assert.ok(await page.locator("#theme-button").evaluate(el => el === document.activeElement));
+    let checked = 0, scans = 0;
+    async function scan(name, width, theme) {
+      if (!(await page.evaluate(() => Boolean(window.axe)))) {
+        await page.addScriptTag({ path: require.resolve("axe-core/axe.min.js") });
+      }
+      const issues = await page.evaluate(async () => (await window.axe.run(document, {
+        runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21aa"] },
+      })).violations.map(issue => [issue.id, issue.nodes.map(node => node.target)]));
+      scans++;
+      if (issues.length) violations.push({ name, width, theme, issues });
+    }
+    const themeButton = page.locator("#theme-button");
+    const picker = page.locator("#theme-picker");
+    await themeButton.click();
+    const themes = await picker.getByRole("radio").evaluateAll(radios => radios.map(radio => radio.value));
+    assert.equal(themes.length, 10, "Ten named palettes appear in the picker.");
+    assert.equal(new Set(themes).size, 10);
+    for (const old of ["charcoal", "forest", "navy"]) assert.ok(themes.includes(old));
+    const swatches = await picker.locator(".theme-swatch").evaluateAll(items =>
+      items.map(item => getComputedStyle(item).backgroundImage));
+    assert.equal(new Set(swatches).size, 10, "Every choice previews its own colors.");
+    // Start with a non-default choice so the first switch to Charcoal must persist too.
+    await picker.getByRole("radio").last().press("Space");
+    await page.keyboard.press("Escape");
+    const second = await context.newPage();
+    await second.goto(base + "/#/");
+    const canvases = new Set(), primaryColors = new Set();
+    for (const theme of themes) {
+      await page.goto(base + "/#/");
+      await themeButton.click();
+      const radio = picker.locator('input[value="' + theme + '"]');
+      await radio.locator("xpath=ancestor::label").click();
+      assert.ok(await radio.isChecked());
+      await page.keyboard.press("Escape");
+      assert.ok(await themeButton.evaluate(el => el === document.activeElement));
+      await page.reload();
+      await page.locator("#generate").waitFor();
+      assert.equal(await page.locator("html").getAttribute("data-theme"), theme);
+      assert.equal(await page.evaluate(() => localStorage.getItem("clipfarm-theme")), theme);
+      await second.waitForFunction(expected => document.documentElement.dataset.theme === expected, theme);
+      const paint = await page.evaluate(() => [
+        getComputedStyle(document.body).backgroundColor,
+        getComputedStyle(document.querySelector("#generate button.primary")).backgroundColor,
+      ]);
+      canvases.add(paint[0]);
+      primaryColors.add(paint[1]);
       for (const width of [320, 390, 768, 1440]) {
-        await page.setViewportSize({ width, height: 950 });
+        await page.setViewportSize({ width, height: width === 320 ? 568 : 950 });
         for (const [name, route, selector] of routes) {
           await page.goto(base + "/" + route);
           await page.locator(selector).first().waitFor();
           if (name === "detail") await openRating();
+          if (name === "generator") {
+            await themeButton.click();
+            assert.ok(await radio.evaluate(el => el === document.activeElement));
+            const fits = await picker.evaluate(el => {
+              const box = el.getBoundingClientRect();
+              return box.left >= 0 && box.right <= innerWidth + 1 && box.top >= 0 && box.bottom <= innerHeight + 1
+                && el.scrollWidth <= el.clientWidth + 1;
+            });
+            assert.ok(fits, theme + " picker must fit at " + width + "px");
+            if (width === 320 || width === 1440) await scan("theme picker", width, theme);
+            await page.keyboard.press("Escape");
+          }
           const dimensions = await page.evaluate(() => [innerWidth, document.documentElement.scrollWidth, document.documentElement.dataset.theme]);
           assert.deepEqual(dimensions, [width, width, theme], name + " layout or theme");
           checked++;
           if (width === 1440 || (width === 320 && theme === "charcoal")) {
-            if (!(await page.evaluate(() => Boolean(window.axe)))) {
-              await page.addScriptTag({ path: require.resolve("axe-core/axe.min.js") });
-            }
-            const issues = await page.evaluate(async () => (await window.axe.run(document, {
-              runOnly: { type: "tag", values: ["wcag2a","wcag2aa","wcag21aa"] },
-            })).violations.map(issue => [issue.id, issue.nodes.map(node => node.target)]));
-            if (issues.length) violations.push({ name, width, theme, issues });
+            await scan(name, width, theme);
           }
         }
       }
     }
+    assert.equal(canvases.size, 10, "Every palette paints a different workspace canvas.");
+    assert.equal(primaryColors.size, 10, "Every palette paints a different action color.");
 
     await page.goto(base + "/#/");
     await page.locator("#generate").waitFor();
     await page.locator("#theme-button").focus();
     await page.keyboard.press("Enter");
-    await page.keyboard.press("ArrowUp"); // Navy -> Forest.
+    await page.keyboard.press("ArrowDown"); // At the final radio, native keyboard navigation wraps.
     await page.keyboard.press("Escape");
-    assert.equal(await page.locator("html").getAttribute("data-theme"), "forest");
-    const second = await context.newPage();
-    await second.goto(base + "/#/");
-    assert.equal(await second.locator("html").getAttribute("data-theme"), "forest");
-    await page.locator("#theme-button").click();
-    await page.getByRole("radio", { name: "Charcoal" }).check();
-    await page.keyboard.press("Escape");
-    await second.waitForFunction(() => document.documentElement.dataset.theme === "charcoal");
-    await page.reload();
-    assert.equal(await page.locator("html").getAttribute("data-theme"), "charcoal");
+    assert.equal(await page.locator("html").getAttribute("data-theme"), themes[0]);
+    await second.waitForFunction(expected => document.documentElement.dataset.theme === expected, themes[0]);
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.locator(".monitor-image img").waitFor();
     await page.evaluate(async () => { await document.fonts.ready; });
@@ -249,11 +288,18 @@ async function run() {
     const fresh = await denied.newPage();
     await fresh.goto(base);
     await fresh.locator("#theme-button").click();
-    await fresh.getByRole("radio", { name: "Forest" }).check();
+    await fresh.locator('#theme-picker input[value="forest"]').locator("xpath=ancestor::label").click();
     assert.equal(await fresh.locator("html").getAttribute("data-theme"), "forest");
+    const legacy = await browser.newContext();
+    await legacy.addInitScript(() => localStorage.setItem("framefold-theme", "navy"));
+    const returning = await legacy.newPage();
+    await returning.goto(base);
+    assert.equal(await returning.locator("html").getAttribute("data-theme"), "navy");
+    assert.equal(await returning.evaluate(() => localStorage.getItem("clipfarm-theme")), "navy");
+    await legacy.close();
     assert.deepEqual(exceptions, []);
     assert.deepEqual(violations, [], "WCAG A/AA findings: " + JSON.stringify(violations));
-    console.log(checked + " responsive theme/route checks passed; 24 axe scans including the open rating form, rating save/reload/update/JSONL download, picker, cross-tab storage, blocked storage, reduced-motion and zoom checks passed.");
+    console.log(checked + " responsive theme/route checks and " + scans + " axe scans passed, including the open picker and rating form. All ten palettes applied, persisted on reload and synced across tabs. Rating export, blocked storage, keyboard navigation, reduced motion and zoom checks passed.");
   } finally {
     if (browser) await browser.close();
     await stop(worker);
