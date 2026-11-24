@@ -1,8 +1,8 @@
 """Voluntary creator ratings for the original automatic selections."""
 import json
 
-from .media import propose
-from .ranking import FEATURE_VERSION, features
+from .analysis import candidate_features
+from .ranking import FEATURE_VERSION
 from .storage import ROOT, db, encode, query
 
 FAMILIES = ("animation", "gaming", "interview", "music", "silent", "sports", "tutorial", "vlog")
@@ -20,16 +20,15 @@ def save(clip, body):
         raise ValueError("Record the license or permission for using this source in training.")
     job = query("""SELECT sources.digest,jobs.source FROM sources JOIN jobs ON jobs.source=sources.id
                    WHERE jobs.id=?""", (clip["job"],))[0]
-    analysis = json.loads((ROOT / clip["job"] / "analysis.json").read_text())
-    options = propose(analysis, json.loads(clip["metadata"])["duration_ms"])
-    candidate = next((row for row in options if row[0] == clip["start_ms"]
-                      and row[1] == clip["end_ms"] and row[3] == clip["reason"]), None)
+    path = ROOT / clip["job"] / "analysis.json"
+    match = (clip["start_ms"], clip["end_ms"], clip["reason"])
+    candidate = next(candidate_features(path, json.loads(clip["metadata"])["duration_ms"], match), None)
     if not candidate:
         raise ValueError("These picks use an older selector. Generate a new run to collect training ratings.")
     record = {"source": job["digest"], "duplicate_group": job["digest"], "brief": "general",
               "family": family, "rights": rights.strip(), "label": grade, "target": "human_acceptance",
-              "start_ms": candidate[0], "end_ms": candidate[1], "reason": candidate[3],
-              "feature_version": FEATURE_VERSION, "features": features(analysis, candidate)}
+              "start_ms": candidate[0], "end_ms": candidate[1], "reason": candidate[2],
+              "feature_version": FEATURE_VERSION, "features": candidate[3]}
     with db() as connection:
         connection.execute("BEGIN IMMEDIATE")
         other = connection.execute("""SELECT ratings.record FROM ratings JOIN clips ON ratings.clip=clips.id

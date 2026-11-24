@@ -1,6 +1,5 @@
 """Loopback HTTP control API and browser entry point."""
 import argparse
-import contextlib
 import json
 import mimetypes
 import os
@@ -31,7 +30,7 @@ def settings(values):
     options = DEFAULTS | {key: values[key] for key in DEFAULTS.keys() & values.keys()}
     if (options["ratio"] not in tuple(media.PRESETS) or options["quality"] not in ("HD", "UHD")
             or options["framing"] not in ("fit", "crop", "track") or type(options["count"]) is not int
-            or not 1 <= options["count"] <= 8 or type(options["captions"]) is not bool):
+            or not 1 <= options["count"] <= 100 or type(options["captions"]) is not bool):
         raise ValueError("Select valid export settings.")
     selector = values.get("selector", "auto")
     if selector not in ("auto", "editorial"):
@@ -95,7 +94,10 @@ class Handler(BaseHTTPRequestHandler):
         if self.cookie:
             self.send_header("Set-Cookie", f"framefold={self.owner}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000")
         self.send_header("Content-Type", kind)
-        self.send_header("Content-Length", str(size))
+        if size is not None:
+            self.send_header("Content-Length", str(size))
+        else:
+            self.send_header("Connection", "close")
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
@@ -164,16 +166,12 @@ class Handler(BaseHTTPRequestHandler):
                             JOIN sources ON jobs.source=sources.id WHERE clips.id=? AND jobs.owner=?""", uid)
 
     def source(self):
-        if shutil.disk_usage(ROOT).free < 1536 * 1024**2:
-            raise ValueError("Free at least 1.5 GB of disk space before importing.")
         if self.headers.get_content_type() == "application/json":
             data = self.body()
             url = data.get("url", "")
-            if not isinstance(url, str) or not url or len(url) > 4096:
-                raise ValueError("Enter a direct HTTPS video link.")
-            with contextlib.closing(imports.public_url(url.strip())) as responses:
-                stream, length, name = next(responses)
-                result = imports.save(stream, length, name, "link", self.owner)
+            if not isinstance(url, str) or not url.strip() or len(url) > 16384:
+                raise ValueError("Paste a public video or recording link.")
+            result = imports.save_url(url.strip(), self.owner)
         else:
             size = int(self.headers.get("Content-Length", "0"))
             name = Path(unquote(self.headers.get("X-File-Name", "Uploaded video"))).name
@@ -238,16 +236,7 @@ class Handler(BaseHTTPRequestHandler):
                 ready = [clip for clip in clips if clip["state"] == "ready"]
                 if not ready:
                     raise LookupError
-                with tempfile.TemporaryDirectory(dir=ROOT) as temporary:
-                    archive = Path(temporary) / "clipfarm-clips.zip"
-                    with zipfile.ZipFile(archive, "w") as zipped:
-                        for clip in ready:
-                            for extension in ("mp4", "srt", "vtt"):
-                                path = ROOT / uid / f"{clip['id']}.{extension}"
-                                if path.is_file():
-                                    zipped.write(path, f"pick-{clip['rank']:02}-{clip['id'][:8]}.{extension}")
-                        zipped.writestr("manifest.json", encode({"clips": ready, "version": media.VERSION, "selector": job["selector"]}))
-                    return self.file(archive, attachment=True)
+                return self.bundle(job, ready)
             if not action:
                 for key in ("settings", "metadata"):
                     job[key] = json.loads(job[key])
@@ -259,6 +248,38 @@ class Handler(BaseHTTPRequestHandler):
                        AND state IN ('queued','running')""", (uid,))
             return self.reply({"ok": True})
         raise LookupError
+
+    def bundle(self, job, clips):
+        files = []
+        for clip in clips:
+            for extension in ("mp4", "srt", "vtt"):
+                path = ROOT / job["id"] / f"{clip['id']}.{extension}"
+                if path.is_file():
+                    files.append((path, f"pick-{clip['rank']:02}-{clip['id'][:8]}.{extension}"))
+                elif extension == "mp4":
+                    raise LookupError
+        manifest = encode({"clips": clips, "version": media.VERSION, "selector": job["selector"]})
+
+        def write_archive(target):
+            # Keep identical ZIP data descriptors for streaming and byte-range responses.
+            class Stream:
+                write = target.write
+                flush = target.flush
+
+            with zipfile.ZipFile(Stream(), "w") as zipped:
+                for path, name in files:
+                    zipped.write(path, name)
+                zipped.writestr(zipfile.ZipInfo("manifest.json"), manifest)
+
+        if self.headers.get("Range"):
+            with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+                archive = Path(directory) / "clipfarm-clips.zip"
+                with archive.open("wb") as target:
+                    write_archive(target)
+                return self.file(archive, attachment=True)
+        self.headers_for(200, "application/zip", None, {
+            "Content-Disposition": 'attachment; filename="clipfarm-clips.zip"', "Accept-Ranges": "bytes"})
+        write_archive(self.wfile)
 
     def clip_api(self, uid, action):
         clip = self.clip(uid)
@@ -309,8 +330,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply({"online": worker.online(), "version": media.VERSION})
             if parts == ["jobs"]:
                 return self.reply(query("""SELECT j.id,j.state,j.created,s.name,
-                    (SELECT count(*) FROM clips WHERE job=j.id AND state='ready') ready
-                    FROM jobs j JOIN sources s ON j.source=s.id WHERE j.owner=? ORDER BY j.created DESC LIMIT 50""",
+                    coalesce(json_extract(j.settings, '$.count'), 3) requested,
+                    count(c.id) ready, count(CASE WHEN c.parent IS NULL THEN c.id END) ready_originals
+                    FROM jobs j JOIN sources s ON j.source=s.id
+                    LEFT JOIN clips c ON c.job=j.id AND c.state='ready' WHERE j.owner=?
+                    GROUP BY j.id ORDER BY j.created DESC LIMIT 50""",
                                         (self.owner,)))
         if self.command == "POST":
             if parts == ["music"]:

@@ -7,23 +7,21 @@ import math
 from pathlib import Path
 import random
 
-from framefold.media import propose
-from framefold.ranking import FEATURES, FEATURE_VERSION, features
+from framefold.analysis import candidate_features
+from framefold.ranking import FEATURES, FEATURE_VERSION
 
 SEED = 42
 FAMILIES = {"interview", "sports", "gaming", "tutorial", "music", "silent", "vlog", "animation"}
 
 
 def export(args):
-    signals = json.loads(args.analysis.read_text())
-    rows = []
-    for candidate in propose(signals, args.duration_ms):
-        start, end, score, reason = candidate
-        rows.append({"source": args.source, "duplicate_group": args.duplicate_group,
-                     "family": args.family, "brief": args.brief, "rights": args.rights,
-                     "start_ms": start, "end_ms": end, "reason": reason, "label": None,
-                     "feature_version": FEATURE_VERSION, "features": features(signals, candidate)})
-    args.output.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    with args.output.open("w") as output:
+        for start, end, reason, vector in candidate_features(args.analysis, args.duration_ms):
+            row = {"source": args.source, "duplicate_group": args.duplicate_group,
+                   "family": args.family, "brief": args.brief, "rights": args.rights,
+                   "start_ms": start, "end_ms": end, "reason": reason, "label": None,
+                   "feature_version": FEATURE_VERSION, "features": vector}
+            output.write(json.dumps(row)+"\n")
 
 
 def grouped_rows(path):

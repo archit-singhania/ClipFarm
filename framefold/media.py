@@ -1,5 +1,6 @@
 """FFmpeg analysis and rendering for source-relative millisecond ranges."""
 import array
+from functools import lru_cache
 import hashlib
 import json
 import math
@@ -25,6 +26,9 @@ PRESETS = {"9:16": (1080, 1920), "16:9": (1920, 1080), "1:1": (1080, 1080),
            "4:5": (1080, 1350), "3:4": (1080, 1440)}
 VERSION = "windows-2/ffmpeg-2"
 MUSIC_FORMATS = "mov,mp3,wav,aiff,flac,ogg,matroska,webm,aac"
+# Aligned to the half-second signal grid. Model and decoder work is bounded
+# per window even for a source lasting many hours.
+WINDOW_MS = 300_000
 
 
 def command(args, timeout=120, cwd=None):
@@ -35,7 +39,7 @@ def command(args, timeout=120, cwd=None):
     except subprocess.CalledProcessError as exc:
         raise ValueError(f"Media processing failed. {exc.stderr.decode(errors='replace')[-400:]}") from exc
     except subprocess.TimeoutExpired as exc:
-        raise ValueError("Media processing timed out. Try a shorter source or retry.") from exc
+        raise ValueError("A media processing step timed out. Retry this run.") from exc
 
 
 def probe(path, restricted=True):
@@ -76,15 +80,23 @@ def probe_music(path):
     return round(duration * 1000)
 
 
-def ffmpeg(source, *args, seek=None, **kwargs):
+def ffmpeg(source, *args, seek=None, input_duration=None, **kwargs):
     seek_args = ["-ss", str(seek)] if seek is not None else []
+    if input_duration is not None:
+        seek_args += ["-t", str(input_duration)]
     return command([FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
                     "-threads", "2", "-filter_threads", "2", *INPUT, *seek_args, "-i", str(source), *args], **kwargs)
 
 
-def analyze(source, metadata, directory, *, transcribe=True):
+def analyze_window(source, metadata, directory, start, end, *, transcribe=True):
+    """Decode one source window. Returned speech and signal times are local."""
+    previous = min(500, start)
+    span = end - start
+    bounds = {"seek": start / 1000, "input_duration": span / 1000}
     frames = ffmpeg(source, "-map", f"0:{metadata['video_index']}", "-an", "-vf",
-                    "fps=2,scale=32:24,format=gray", "-f", "rawvideo", "-", timeout=600)
+                    "fps=2:start_time=0,scale=32:24,format=gray", "-t", str((span+previous)/1000),
+                    "-f", "rawvideo", "-",
+                    seek=(start-previous)/1000, input_duration=(span+previous)/1000, timeout=900)
     size = 32 * 24
     fingerprints = []
     motion = [0.0]
@@ -108,32 +120,64 @@ def analyze(source, metadata, directory, *, transcribe=True):
         # Eight by six spatial bins preserve composition while tolerating resize.
         fingerprints.append([sum(frame[y*32+x:y*32+x+4])//4
                              for y in range(2, 24, 4) for x in range(0, 32, 4)])
+    bins = (span + 499) // 500
+    def grid(values, padding):
+        values = values[previous//500:previous//500 + bins]
+        values.extend([padding] * (bins-len(values)))
+        return values
+    motion = grid(motion, 0.0)
+    motion_cues = grid(motion_cues, 0.0)
+    fingerprints = grid(fingerprints, fingerprints[-1] if fingerprints else [0]*48)
     energy, speech, notice = [], [], None
     if metadata["audio"]:
-        samples = ffmpeg(source, "-vn", "-ac", "1", "-ar", "2000", "-f", "s16le", "-", timeout=600)
+        samples = ffmpeg(source, "-map", "0:a:0", "-vn", "-t", str(span/1000), "-ac", "1", "-af",
+                         "aresample=2000:async=1:first_pts=0", "-f", "s16le", "-", **bounds, timeout=900)
         pcm = array.array("h", samples)
         energy = [math.sqrt(statistics.mean(value * value for value in pcm[i:i+1000]))
                   for i in range(0, len(pcm), 1000)]
+        energy = energy[:bins] + [0.0] * max(0, bins-len(energy))
         if transcribe and max(energy, default=0) > 160:
             cached = directory.parent / "models" / "ggml-tiny.en.bin"
             model = Path(setting("WHISPER_MODEL", cached)).expanduser().resolve()
             if model.is_file():
                 wav = directory / "speech.wav"
-                ffmpeg(source, "-vn", "-ar", "16000", "-ac", "1", str(wav), timeout=600)
                 prefix = directory / "speech"
                 try:
+                    ffmpeg(source, "-map", "0:a:0", "-vn", "-t", str(span/1000), "-ac", "1", "-af",
+                           "aresample=16000:async=1:first_pts=0", str(wav), **bounds, timeout=900)
                     command(["whisper-cli", "-m", str(model), "-f", str(wav), "-oj", "-of", str(prefix),
                              "-l", "auto", "-ng"], timeout=3600)
                     output = json.loads(prefix.with_suffix(".json").read_text())
-                    speech = [{"start": s["offsets"]["from"], "end": s["offsets"]["to"],
+                    speech = [{"start": max(0, s["offsets"]["from"]), "end": min(span, s["offsets"]["to"]),
                                "text": s["text"].strip()} for s in output["transcription"]
-                              if s["text"].strip() and not re.fullmatch(r"\s*[\[(].*[\])]\s*", s["text"])]
+                              if max(0, s["offsets"]["from"]) < min(span, s["offsets"]["to"])
+                              and s["text"].strip() and not re.fullmatch(r"\s*[\[(].*[\])]\s*", s["text"])]
                 finally:
                     wav.unlink(missing_ok=True)
                     prefix.with_suffix(".json").unlink(missing_ok=True)
             else:
                 notice = "Audio is present. Set up a local speech model and start a new run to generate captions."
     return {"motion": motion, "motion_cues": motion_cues, "energy": energy, "speech": speech, "notice": notice, "fingerprints": fingerprints}
+
+
+def combine(windows):
+    """Join adjacent windows, shifting cue times by their source-relative offset."""
+    combined = {"motion": [], "motion_cues": [], "energy": [], "fingerprints": [], "speech": [], "notice": None}
+    for offset, signals in windows:
+        for key in ("motion", "motion_cues", "energy", "fingerprints"):
+            combined[key].extend(signals[key])
+        combined["speech"].extend({**cue, "start": cue["start"]+offset, "end": cue["end"]+offset}
+                                  for cue in signals["speech"])
+        combined["notice"] = combined["notice"] or signals["notice"]
+    return combined
+
+
+def analyze(source, metadata, directory, *, transcribe=True):
+    """Provide a complete signal array for the offline editorial training tools."""
+    duration = metadata["duration_ms"]
+    return combine((start, analyze_window(source, metadata, directory, start,
+                                          min(start+WINDOW_MS, duration), transcribe=transcribe))
+                   for start in range(0, duration, WINDOW_MS))
 
 
 def propose(signals, duration):
@@ -178,38 +222,46 @@ def propose(signals, duration):
             for start, end, score, reason in candidates if min(end, duration)-max(0, start) >= 2400]
 
 
-def repeated_scene(signals, left, right):
+def scene_signature(signals, start, end):
     fingerprints = signals.get("fingerprints", [])
-    if not fingerprints or signals["speech"]:
+    if not fingerprints or any(cue["start"] < end and cue["end"] > start for cue in signals["speech"]):
+        return b""
+    return bytes(pixel for fraction in (.25, .45, .65, .8)
+                 for pixel in fingerprints[min(len(fingerprints)-1, (start + round((end-start)*fraction))//500)])
+
+
+def same_scene(left, right):
+    if not left or not right:
         return False
+    total = peaks = 0
+    for offset in range(0, len(left), 48):
+        delta = [abs(x-y) for x,y in zip(left[offset:offset+48], right[offset:offset+48])]
+        total += sum(delta)
+        peaks += sum(sorted(delta, reverse=True)[:3])
+        if total >= 5*len(left) or peaks >= 8*12:
+            return False
+    return True
 
-    def signature(start, end):
-        return [fingerprints[min(len(fingerprints)-1, (start + round((end-start)*fraction))//500)]
-                for fraction in (.25, .45, .65, .8)]
 
-    a, b = signature(*left), signature(*right)
-    differences = [sorted((abs(x-y) for x, y in zip(first, second)), reverse=True)
-                   for first, second in zip(a, b)]
-    # Distant picks can share a nearly static backdrop while differing locally.
-    return (statistics.mean(v for row in differences for v in row) < 5
-            and statistics.mean(v for row in differences for v in row[:3]) < 8)
+def distinct_picks(ordered, count):
+    picks = []
+    accepted = []
+    for start, end, reason, signature in ordered:
+        if any(min(end, b)-max(start, a) > .25*min(end-start, b-a)
+               or same_scene(signature, other) for a,b,other in accepted):
+            continue
+        accepted.append((start, end, signature))
+        picks.append({"start_ms": start, "end_ms": end, "reason": reason})
+        if len(picks) == count:
+            break
+    return picks
 
 
 def select(signals, duration, count, selector=None):
     """Rank and deduplicate windows before assigning stable pick numbers."""
     ordered, version = rank(signals, propose(signals, duration), selector)
-    picks = []
-    for (start, end, _, reason), score in ordered:
-        if any(
-            min(end, item["end_ms"]) - max(start, item["start_ms"])
-            > 0.25 * min(end-start, item["end_ms"]-item["start_ms"])
-            or repeated_scene(signals, (start, end), (item["start_ms"], item["end_ms"])) for item in picks
-        ):
-            continue
-        picks.append({"start_ms": start, "end_ms": end, "reason": reason})
-        if len(picks) == count:
-            break
-    return picks, version
+    rows = ((a, b, reason, scene_signature(signals, a, b)) for (a, b, _, reason), _ in ordered)
+    return distinct_picks(rows, count), version
 
 
 def speech_candidate(segments):
@@ -255,6 +307,11 @@ def mix_filters(track_index, duration, source_audio):
     ]
 
 
+@lru_cache(maxsize=1)
+def has_subtitles_filter(binary):
+    return bool(re.search(rb"\bsubtitles\s+V->V", command([binary, "-hide_banner", "-filters"])))
+
+
 def render(source, metadata, clip, directory, speech):
     options = json.loads(clip["options"])
     width, height = PRESETS[options["ratio"]]
@@ -284,8 +341,7 @@ def render(source, metadata, clip, directory, speech):
             video = f"[0:{metadata['video_index']}]{filters},setsar=1,fps=30"
             next_input = 1
             if cues:
-                available = command([FFMPEG, "-hide_banner", "-filters"])
-                if re.search(rb"\bsubtitles\s+V->V", available):
+                if has_subtitles_filter(FFMPEG):
                     srt = destination.with_suffix(".srt").name
                     video += f",subtitles={srt}:force_style='Alignment=2,MarginV=36,FontSize=18,Outline=2'"
                 else:
@@ -324,8 +380,8 @@ def render(source, metadata, clip, directory, speech):
                       verified=True, version=VERSION)
         thumbnail = destination.with_suffix(".jpg")
         try:
-            ffmpeg(staging, "-ss", str(duration * .45), "-frames:v", "1",
-                   "-vf", "scale=480:-2", "-q:v", "4", str(thumbnail), timeout=30)
+            ffmpeg(staging, "-frames:v", "1", "-vf", "scale=480:-2", "-q:v", "4",
+                   str(thumbnail), seek=duration*.45, timeout=30)
             actual["poster"] = thumbnail.is_file()
         except ValueError:
             thumbnail.unlink(missing_ok=True)

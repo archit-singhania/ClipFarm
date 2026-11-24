@@ -3,9 +3,10 @@ import fcntl
 import json
 import os
 import shutil
+import sqlite3
 import time
 
-from . import media
+from . import analysis, media
 from .storage import ROOT, db, encode, execute, identifier, init, query
 
 ACTIVE = ("queued", "running")
@@ -53,18 +54,27 @@ def process(job):
             set_stage(job, 2)
         if cancelled(job):
             return
-        analysis = path / "analysis.json"
-        if not analysis.exists():
-            result = media.analyze(source, info, path)
-            temporary = analysis.with_suffix(".tmp")
+        manifest = path / "analysis.json"
+        if not manifest.exists():
+            if info["duration_ms"] > media.WINDOW_MS:
+                result = analysis.build(source, info, path, settings.get("selector"), lambda: cancelled(job))
+                if result is None:
+                    return
+            else:
+                result = media.analyze(source, info, path)
+            temporary = manifest.with_suffix(".tmp")
             temporary.write_text(encode(result))
-            temporary.replace(analysis)
+            temporary.replace(manifest)
         else:
-            result = json.loads(analysis.read_text())
+            result = json.loads(manifest.read_text())
+        indexed = result.get("format") == analysis.FORMAT
         if cancelled(job):
             return
         if job["stage"] < 3:
-            picks, selector = media.select(result, info["duration_ms"], settings["count"], settings.get("selector"))
+            if indexed:
+                picks, selector = analysis.picks(path, settings["count"]), result["selector"]
+            else:
+                picks, selector = media.select(result, info["duration_ms"], settings["count"], settings.get("selector"))
             with db() as connection:
                 connection.executemany(
                     "INSERT INTO clips (id,job,rank,start_ms,end_ms,reason,options) VALUES (?,?,?,?,?,?,?)",
@@ -82,14 +92,15 @@ def process(job):
             try:
                 if shutil.disk_usage(ROOT).free < 512 * 1024**2:
                     raise ValueError("Free at least 512 MB of disk space and retry.")
-                artifact = media.render(source, info, clip, path, result["speech"])
+                speech = analysis.cues(path, clip["start_ms"], clip["end_ms"]) if indexed else result["speech"]
+                artifact = media.render(source, info, clip, path, speech)
                 execute("UPDATE clips SET state='ready',artifact=?,error=NULL WHERE id=?",
                         (encode(artifact), clip["id"]))
             except (ValueError, OSError) as exc:
                 print(f"Clip {clip['id']}: {exc}", flush=True)
                 execute("UPDATE clips SET state='failed',error=? WHERE id=?",
                         (public_error(exc, "Video export failed. Check FFmpeg and retry."), clip["id"]))
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, sqlite3.Error) as exc:
         print(f"Run {job_id}: {exc}", flush=True)
         execute("UPDATE jobs SET state='failed',error=? WHERE id=?",
                 (public_error(exc, "Could not process this video. Try a different source."), job_id))

@@ -1,12 +1,12 @@
 # ClipFarm
 
-A local workspace for automatically turning videos into short, watermark-free clips. Upload a file or paste a permitted direct HTTPS video URL, choose **Generate clips**, and download individual MP4s or a ZIP from Results. Details lets you save a separate copy with a new trim, crop or caption setting.
+Upload a video or paste a public recording link, choose **3, 5, 10, 15, 20, 50, or 100 clips**, and select **Generate clips**. Download individual MP4s or a ZIP from Results. Details lets you save a separate copy with a new trim, crop or caption setting.
 
 [Play the public ClipFarm demo](https://clipfarm-screening-room.atsin2526.chatgpt.site). The demo has three downloadable HD excerpts from *Sintel*. Use the local app below for your own footage.
 
 ## Start
 
-Use Python 3.11+, FFmpeg and FFprobe on macOS or Linux. FFmpeg needs its `libx264` encoder. Install the Python dependency for caption rendering when FFmpeg lacks libass.
+Use Python 3.11+, FFmpeg and FFprobe on macOS or Linux. FFmpeg needs its `libx264` encoder. The Python requirements include yt-dlp for recording links and Pillow for caption rendering.
 
 ```sh
 python3 -m venv .venv
@@ -35,9 +35,10 @@ The renderer uses FFmpeg's libass subtitles filter where available, with a Pillo
 
 ## Runs and recovery
 
-- The link importer accepts direct public HTTPS media files. It checks each redirect and only connects to a validated public address. Use upload for videos behind a login or embedded in a webpage. The file limit is 1 GB and the duration limit is one hour, with an UHD source pixel cap.
-- The worker records durable checkpoints for source preparation, analysis and picks. After restart it resumes at the last checkpoint and skips ready files. Cancel prevents additional work at the next stage or clip boundary. In-progress encoding can finish before cancellation takes effect.
-- Results exposes files as soon as they pass verification. A partial run keeps ready files and offers retries for failed clips. A static or low-signal source may return fewer clips or none.
+- Paste a link to a single finished recording on YouTube, Twitch, Kick, Rumble or another supported site. Common bare links such as `youtu.be/…` also work. The importer handles public direct media, supported embedded players, and finished HLS/DASH recordings. The provider must make playable, unprotected media available from your network. For private, expired, or restricted links, upload an original you have permission to use.
+- Video uploads and recording imports have no fixed file-size or duration ceiling. Allow disk space for the original, temporary tracks and exported clips. The app retains 512 MiB of free space. Videos must contain at least two seconds of playable footage within the UHD source pixel limit. Keep the tab open during transfer. Uploads display progress.
+- On long recordings the worker analyzes and transcribes five-minute windows. It writes each completed window to disk and ranks candidates across the full source. After restart it resumes at the last checkpoint and skips ready files. Cancel stops at the next analysis window, stage or clip boundary.
+- Results and History display ready original clips against the requested target. Edits are counted separately. Results exposes files as soon as they pass verification, and a full ZIP download streams them without making another on-disk copy. A static or low-signal source may return fewer clips or none. A partial run keeps ready files and offers retries for failed clips.
 - Export supports 9:16, 16:9, 1:1, 4:5 and 3:4 in HD or double-dimension UHD presets. The default vertical HD is 1080 × 1920. Fit preserves the complete image. Center crop fills the frame. Results labels upscaled outputs.
 - **Follow subject** estimates the movement of a compact foreground subject and smooths the crop. It falls back to the full frame for ambiguous movement, cuts, or extended tracking loss. **Center crop** gives a fixed alternative.
 - A soundtrack can be attached in Export settings or on a revision. The renderer loops it to the clip length and lowers its level under foreground audio using FFmpeg sidechain compression.
@@ -64,4 +65,13 @@ python3 -m unittest discover -s tests -v
 
 The optional browser matrix uses `npm ci --prefix tests/browser` and `npm test --prefix tests/browser` with Chrome installed.
 
+Set `CLIPFARM_TEST_LARGE_BATCH=1` to include the two-hour, 100-export HTTP test. It transfers more than 1 GiB and verifies the SHA-256 of each MP4 in the ZIP.
+
 The speech test additionally uses `FRAMEFOLD_WHISPER_MODEL` and macOS `say`, or a permitted direct video link set in `FRAMEFOLD_TEST_SPEECH_URL`. See the [implementation summary](IMPLEMENTATION.md), [upstream audit](third_party/README.md) and [local ranker workflow](ml/README.md).
+
+### Test it manually
+
+1. Start ClipFarm and open the generator in the same browser you use for your runs. [Local generator](http://127.0.0.1:8765/)
+2. Select **Video link**, paste `https://youtu.be/HOfdboHvshg`, choose **5** under **Clip target**, and click **Generate clips**. The link points to Blender’s 52-second *Sintel* trailer. [Original video](https://www.youtube.com/watch?v=HOfdboHvshg)
+3. When the run finishes, play a pick. Choose **Download all**, unzip the archive, and compare the number of MP4s with the ready count in Results. Reopen **My runs** in the same browser to verify that the run is saved.
+4. For a longer test, select **New run**, then **Upload file**. Choose a recording with many distinct moments, set the target to **100**, and keep the tab open during transfer. Results shows how many original picks finished. A short or repetitive recording can yield fewer than the target.

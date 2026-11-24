@@ -1,48 +1,30 @@
 """Stream imports into private staging and probe self-contained media."""
+import contextlib
+import errno
 import hashlib
 import http.client
-import ipaddress
-import os
-import socket
-import ssl
+import re
+import shutil
+import tempfile
 from pathlib import Path
-from urllib.parse import urljoin, urlsplit, unquote
+from urllib.parse import urljoin, unquote
 
 from .media import probe, probe_music
+from .public_network import direct_connection, https_url
 from .storage import ROOT, db, encode, identifier
 
-LIMIT = 1024 ** 3
+RESERVE = 512 * 1024**2
+BLOCK = 1024**2
 FORMATS = {"mov", "mp4", "matroska", "webm", "avi", "mpeg", "mpegts", "flv", "ogg"}
-
-
-class PinnedHTTPS(http.client.HTTPSConnection):
-    def __init__(self, host, address):
-        super().__init__(host, timeout=15, context=ssl.create_default_context())
-        self.address = address
-
-    def connect(self):
-        raw = socket.create_connection((self.address, 443), self.timeout)
-        try:
-            self.sock = self._context.wrap_socket(raw, server_hostname=self.host)
-        except BaseException:
-            raw.close()
-            raise
 
 
 def public_url(url):
     for _ in range(5):
-        parsed = urlsplit(url)
-        if (parsed.scheme != "https" or parsed.username is not None or not parsed.hostname
-                or parsed.port not in (None, 443)):
-            raise ValueError("Use a direct public HTTPS video link or upload a file.")
-        host = parsed.hostname.encode("idna").decode()
-        addresses = {row[4][0] for row in socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)}
-        if not addresses or any(not ipaddress.ip_address(ip).is_global for ip in addresses):
-            raise ValueError("The link must point to a public video host.")
+        parsed = https_url(url)
         path = parsed.path or "/"
         if parsed.query:
             path += "?" + parsed.query
-        connection = PinnedHTTPS(host, sorted(addresses)[0])
+        connection = direct_connection(parsed.hostname)
         try:
             connection.request("GET", path, headers={"Accept": "video/*, application/octet-stream"})
             response = connection.getresponse()
@@ -54,53 +36,92 @@ def public_url(url):
             length = response.getheader("Content-Length")
             yield response, int(length) if length else None, unquote(Path(parsed.path).name) or "Linked video"
             return
+        except (OSError, http.client.HTTPException) as exc:
+            raise ValueError("Could not read the public video link. Retry or upload the recording.") from exc
         finally:
             connection.close()
     raise ValueError("The video link redirected too many times.")
 
 
-def save(stream, length, name, origin, owner):
-    if length is not None and not 0 < length <= LIMIT:
-        raise ValueError("Choose a video smaller than 1 GB.")
-    source_id = identifier()
-    staging = ROOT / (source_id + ".upload")
-    original = ROOT / (source_id + ".source")
+def require_space(directory, needed=0):
+    if shutil.disk_usage(directory).free < RESERVE + needed:
+        raise ValueError("There is insufficient disk space for this recording. Free storage and retry.")
+
+
+def save_url(url, owner):
+    url = url.strip()
+    if re.match(r"^(?:[a-z0-9-]+\.)+[a-z]{2,}(?:[/?#]|$)", url, re.I):
+        url = "https://" + url
+    parsed = https_url(url)
+    # Fragments are client-side and must never supply extractor options.
+    url = parsed._replace(fragment="").geturl()
+    if Path(parsed.path).suffix.lower() in {".mp4", ".mov", ".mkv", ".webm", ".avi", ".mpeg", ".mpg", ".flv", ".ts", ".ogv", ".m4v"}:
+        with contextlib.closing(public_url(url)) as responses:
+            stream, length, name = next(responses)
+            return save(stream, length, name, "link", owner)
     try:
-        digest = stream_file(stream, length, staging, LIMIT)
-        metadata = probe(staging)
-        if not FORMATS.intersection(metadata["format"].split(",")):
-            raise ValueError("Upload a self-contained MP4, MOV, WebM or MKV video.")
-        if not 2 <= metadata["duration_ms"] / 1000 <= 3600:
-            raise ValueError("Choose a video between 2 seconds and 1 hour.")
-        with db() as connection:
-            result = connection.execute(
-                "INSERT OR IGNORE INTO sources VALUES (?,?,?,?,?,?)",
-                (source_id, owner, name[:160], digest, encode(metadata), origin),
-            )
-            if result.rowcount:
-                os.replace(staging, original)
-            else:
-                source_id = connection.execute(
-                    "SELECT id FROM sources WHERE owner=? AND digest=?", (owner, digest)
-                ).fetchone()[0]
-        return {"id": source_id, "name": name, **metadata}
+        from .providers import recording
+    except ModuleNotFoundError as exc:
+        raise ValueError("The recording importer needs its dependencies. Install requirements.txt and restart ClipFarm.") from exc
+    with tempfile.TemporaryDirectory(prefix=".recording-", dir=ROOT) as scratch:
+        path, name = recording(url, Path(scratch))
+        with path.open("rb") as source:
+            digest = hashlib.file_digest(source, "sha256").hexdigest()
+        return store_source(path, name, digest, "link", owner)
+
+
+def save(stream, length, name, origin, owner):
+    if length is not None and length <= 0:
+        raise ValueError("Choose a video containing media.")
+    staging = ROOT / (identifier() + ".upload")
+    try:
+        digest = stream_file(stream, length, staging)
+        return store_source(staging, name, digest, origin, owner)
     finally:
         staging.unlink(missing_ok=True)
 
 
-def stream_file(stream, length, staging, limit):
+def store_source(staging, name, digest, origin, owner):
+    metadata = probe(staging)
+    if not FORMATS.intersection(metadata["format"].split(",")):
+        raise ValueError("Upload a self-contained MP4, MOV, WebM or MKV video.")
+    if metadata["duration_ms"] < 2000:
+        raise ValueError("Choose a video at least 2 seconds long.")
+    source_id = identifier()
+    with db() as connection:
+        result = connection.execute(
+            "INSERT OR IGNORE INTO sources VALUES (?,?,?,?,?,?)",
+            (source_id, owner, name[:160], digest, encode(metadata), origin),
+        )
+        if result.rowcount:
+            staging.replace(ROOT / (source_id + ".source"))
+        else:
+            source_id = connection.execute(
+                "SELECT id FROM sources WHERE owner=? AND digest=?", (owner, digest)
+            ).fetchone()[0]
+    return {"id": source_id, "name": name[:160], **metadata}
+
+
+def stream_file(stream, length, staging, limit=None):
+    require_space(staging.parent, length or 0)
     digest = hashlib.sha256()
     size = 0
-    with staging.open("xb") as target:
-        while length is None or size < length:
-            chunk = stream.read(min(1024 * 1024, length - size) if length is not None else 1024 * 1024)
-            if not chunk:
-                break
-            size += len(chunk)
-            if size > limit:
-                raise ValueError("The upload exceeds the size limit.")
-            target.write(chunk)
-            digest.update(chunk)
+    try:
+        with staging.open("xb") as target:
+            while length is None or size < length:
+                chunk = stream.read(BLOCK if length is None else min(BLOCK, length - size))
+                if not chunk:
+                    break
+                size += len(chunk)
+                if limit is not None and size > limit:
+                    raise ValueError("The upload exceeds the size limit.")
+                require_space(staging.parent, len(chunk))
+                target.write(chunk)
+                digest.update(chunk)
+    except OSError as exc:
+        if exc.errno == errno.ENOSPC:
+            raise ValueError("The disk filled during transfer. Free storage and retry.") from exc
+        raise
     if length is not None and size != length:
         raise ValueError("The transfer ended early. Try again.")
     return digest.hexdigest()

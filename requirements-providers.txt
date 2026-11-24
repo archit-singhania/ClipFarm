@@ -1,0 +1,2 @@
+# Pinned because recording imports restrict yt-dlp's request and downloader adapters.
+yt-dlp[default]==2026.10.26

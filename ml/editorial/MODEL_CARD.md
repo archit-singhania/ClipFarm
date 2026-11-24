@@ -23,6 +23,16 @@ ClipFarm generates candidate windows with the same production motion and audio r
 
 For each fold, all windows of one film and its trailer are held out together. Only original generator proposals enter the evaluation. nDCG@3 measures ranking before the final overlap and diversity filter. Every extra training window from the held-out original is excluded. The shipped weights are refit on the available originals after evaluation.
 
+The final dataset contains 780 candidate windows, 41 of which overlap confirmed teaser footage. Seven matched source intervals account for 18.5 seconds of footage. FFmpeg 8.1.2 extracted the signals and LightGBM 4.6.0 fitted the 30-round booster. Each fold includes all eligible held-out production proposals, including those assigned grade 0.
+
+| Held-out original | Eligible proposals | Proposals overlapping a matched shot | Rules nDCG@3 | Trained nDCG@3 |
+| --- | ---: | ---: | ---: | ---: |
+| Big Buck Bunny | 63 | 2 | 0.0000 | 0.0000 |
+| Tears of Steel | 56 | 13 | 0.2346 | 0.0000 |
+| Mean across originals | | | 0.1173 | 0.0000 |
+
+The model missed all labeled shots among its top three candidates on both held-out films. The deterministic rules found one on Tears of Steel. These results support retaining the rules profile as the default. ClipFarm exposes the learned model for reproducible experiments.
+
 The corpus contains two films made in one studio. Scores are sensitive to a handful of matched shots. The live-action/VFX film and animated film provide no independent evidence for tutorials, podcasts, sports, music, games or creator acceptance. Use the rules profile for general work. Treat the Film trailer profile as experimental.
 
 ## Reproduction

@@ -1,5 +1,6 @@
 """Rights-cleared synthetic media through the production HTTP API and worker."""
 import array
+import hashlib
 import math
 from concurrent.futures import ThreadPoolExecutor
 import http.cookiejar
@@ -7,6 +8,7 @@ import io
 import json
 import os
 from pathlib import Path
+import random
 import signal
 import shlex
 import sqlite3
@@ -130,8 +132,12 @@ class Workflow(unittest.TestCase):
             print(job["name"], clip["range_label"], info["duration_ms"], info["width"], info["height"],
                   info["codec"], info["bytes"], info["caption_bounds_ms"])
         with self.request(f"/api/jobs/{job['id']}/download") as response:
-            with zipfile.ZipFile(io.BytesIO(response.read())) as archive:
+            bundle = response.read()
+            with zipfile.ZipFile(io.BytesIO(bundle)) as archive:
                 self.assertEqual(sum(name.endswith(".mp4") for name in archive.namelist()), len(clips))
+        with self.request(f"/api/jobs/{job['id']}/download", headers={"Range": "bytes=-256"}) as response:
+            self.assertEqual(response.status, 206)
+            self.assertEqual(response.read(), bundle[-256:])
         with self.assertRaises(urllib.error.HTTPError) as exception:
             urllib.request.urlopen(f"{self.base}/api/clips/{clips[0]['id']}/download")
         self.assertEqual(exception.exception.code, 404)
@@ -238,6 +244,15 @@ class Workflow(unittest.TestCase):
             uid = results[0]["id"]
             self.assertTrue(self.read(f"/api/jobs/{uid}/cancel", {})["ok"])
             self.assertEqual(self.read(f"/api/jobs/{uid}")["state"], "cancelled")
+            for count in (1, 3, 5, 8, 10, 15, 20, 50, 100):
+                batch = self.start(imported, f"target-{count}", {"count": count})
+                self.assertTrue(self.read(f"/api/jobs/{batch}/cancel", {})["ok"])
+                history = next(row for row in self.read("/api/jobs") if row["id"] == batch)
+                self.assertEqual((history["requested"], history["ready_originals"]), (count, 0))
+            for count in (0, 101, True, 3.5):
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    self.start(imported, "invalid-count", {"count": count})
+                self.assertEqual(error.exception.code, 400)
         finally:
             self.start_worker()
         run = self.wait(self.start(imported, "retry"))
@@ -268,6 +283,51 @@ class Workflow(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as exception:
             self.read("/api/sources", {"url": "https://127.0.0.1/fixture.mp4"})
         self.assertEqual(exception.exception.code, 400)
+
+    @unittest.skipUnless(os.environ.get("CLIPFARM_TEST_LARGE_BATCH"), "opt-in 100-clip HD render")
+    def test_two_hour_upload_to_100_distinct_downloads(self):
+        # 102 different compositions, each with one motion event. At 2 fps the
+        # fixture traverses a real multi-hour timeline with a small encode cost.
+        source = self.root / "two-hour-recording.mp4"
+        with subprocess.Popen(["ffmpeg", "-v", "error", "-f", "rawvideo", "-pix_fmt", "gray",
+                               "-s", "32x24", "-r", "2", "-i", "-", "-c:v", "libx264",
+                               "-g", "12", "-pix_fmt", "yuv420p", str(source)], stdin=subprocess.PIPE) as proc:
+            colors = random.Random(408)
+            for _ in range(102):
+                rows = [b"".join(bytes([colors.randint(25, 220)]) * 4 for _ in range(8)) for _ in range(6)]
+                frame = b"".join(row * 4 for row in rows)
+                reverse = bytes(255 - value for value in frame)
+                proc.stdin.write(frame * 12 + (reverse + frame) * 3 + frame * 126)
+            proc.stdin.close()
+            self.assertEqual(proc.wait(), 0)
+        # A valid ISO BMFF free-space box crosses the old 1 GiB upload ceiling
+        # without requiring an hour of high-bitrate test footage.
+        with source.open("ab") as pad:
+            box_size = 1024**3
+            pad.write(box_size.to_bytes(4, "big") + b"free")
+            pad.truncate(pad.tell() + box_size - 8)
+        with source.open("rb") as stream, self.request("/api/sources", stream, {
+                "Content-Type": "application/octet-stream", "Content-Length": str(source.stat().st_size),
+                "X-File-Name": source.name}) as response:
+            imported = json.load(response)
+        self.assertEqual(imported["duration_ms"], 7_344_000)
+        run = self.wait(self.start(imported, "100-clips", {"count": 100}), timeout=2400)
+        self.assertEqual(run["state"], "ready", run.get("error"))
+        clips = run["clips"]
+        self.assertEqual(len(clips), 100)
+        self.assertGreater(max(c["start_ms"] for c in clips), 7_000_000)
+        self.assertTrue(all(c["artifact"]["verified"] for c in clips))
+        self.assertEqual(len({c["artifact"]["sha256"] for c in clips}), 100)
+        history = next(row for row in self.read("/api/jobs") if row["id"] == run["id"])
+        self.assertEqual((history["ready"], history["ready_originals"], history["requested"]), (100, 100, 100))
+        with self.request(f"/api/jobs/{run['id']}/download") as response, tempfile.TemporaryFile() as local:
+            while chunk := response.read(1024**2):
+                local.write(chunk)
+            with zipfile.ZipFile(local) as archive:
+                self.assertEqual(len(json.loads(archive.read("manifest.json"))["clips"]), 100)
+                for clip in clips:
+                    with archive.open(f"pick-{clip['rank']:02}-{clip['id'][:8]}.mp4") as exported:
+                        self.assertEqual(hashlib.file_digest(exported, "sha256").hexdigest(), clip["artifact"]["sha256"])
 
     @unittest.skipUnless(os.environ.get("FRAMEFOLD_WHISPER_MODEL"), "local Whisper model not configured")
     def test_speech(self):

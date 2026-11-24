@@ -60,9 +60,18 @@ async function run() {
     assert.equal(await guide.getAttribute("aria-pressed"), "false");
     await guide.click();
 
-    async function generate(file, useMusic) {
+    const target = page.getByRole("group", { name: "Clip target" });
+    assert.deepEqual(await target.getByRole("radio").evaluateAll(inputs => inputs.map(input => +input.value)),
+      [3, 5, 10, 15, 20, 50, 100]);
+    const defaultCount = target.getByRole("radio", { name: "3", exact: true });
+    assert.ok(await defaultCount.isChecked());
+    await defaultCount.press("ArrowRight");
+    assert.ok(await target.getByRole("radio", { name: "5", exact: true }).isChecked());
+
+    async function generate(file, useMusic, count) {
       await page.getByRole("link", { name: "Generator", exact: true }).click();
       await page.getByRole("button", { name: "Upload file" }).click();
+      await target.getByRole("radio", { name: String(count), exact: true }).check();
       await page.getByLabel("Choose a video").setInputFiles(file);
       if (useMusic) {
         await page.locator("summary").click();
@@ -73,8 +82,8 @@ async function run() {
       await page.waitForURL(/#\/runs\/[a-f0-9]{32}$/);
       return page.url().split("/").pop();
     }
-    const resultId = await generate(motion, true);
-    const staticId = await generate(still, false);
+    const resultId = await generate(motion, true, 100);
+    const staticId = await generate(still, false, 3);
     const readJob = async id => {
       const response = await context.request.get(base + "/api/jobs/" + id);
       assert.equal(response.status(), 200);
@@ -82,6 +91,8 @@ async function run() {
     };
     const options = (await readJob(resultId)).settings;
     assert.ok(options.music_id && options.framing === "track");
+    assert.equal(options.count, 100);
+    assert.equal((await readJob(staticId)).settings.count, 3);
     worker = spawn(python, ["-m", "framefold.worker"], { cwd: root, env, stdio: "inherit" });
     async function finished(id) {
       for (let attempt = 0; attempt < 300; attempt++) {
@@ -95,8 +106,29 @@ async function run() {
     assert.equal(job.state, "ready", JSON.stringify(job));
     assert.equal((await finished(staticId)).state, "no_matches");
     assert.ok(job.clips[0].artifact.soundtrack, "Selected music reaches the encoded clip.");
+    await page.goto(base + "/#/runs/" + resultId);
+    await page.locator("#run-caption").filter({ hasText: "of 100 requested clips ready" }).waitFor();
+    await page.getByText(/fewer distinct highlights than requested/).waitFor();
     await stop(worker);
-    const pendingId = await generate(motion, false);
+    // Exercise the linked-recording form without contacting a third-party video host.
+    const recording = "www.twitch.tv/videos/123456";
+    await page.goto(base + "/#/");
+    await page.getByRole("button", { name: "Video link" }).click();
+    await page.getByLabel("Public video link").fill(recording);
+    await target.getByRole("radio", { name: "50", exact: true }).check();
+    let linkedUrl;
+    await page.route("**/api/sources", route => {
+      linkedUrl = route.request().postDataJSON().url;
+      return route.fulfill({ status: 201, json: { id: job.source } });
+    });
+    await page.getByRole("button", { name: /Generate clips/ }).click();
+    await page.waitForURL(/#\/runs\/[a-f0-9]{32}$/);
+    await page.unroute("**/api/sources");
+    assert.equal(linkedUrl, "https://" + recording);
+    const pendingId = page.url().split("/").pop();
+    assert.equal((await readJob(pendingId)).settings.count, 50);
+    await page.goto(base + "/#/runs");
+    await page.getByText("0 of 50 requested clips ready", { exact: true }).waitFor();
 
     const detailURL = base + "/#/runs/" + resultId + "/" + job.clips[0].id;
     const ratingPath = "/api/clips/" + job.clips[0].id + "/rating";

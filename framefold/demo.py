@@ -72,8 +72,9 @@ def build(archive, output, name, credit=""):
 <main class="shell">
   <div class="heading-row"><div><h1>Example <em>run.</em></h1>
   <p class="lede">{html.escape(name)} · {len(cards)} downloadable clips</p></div>
-  <a class="button primary" href="clipfarm-clips.zip" download>↓ Download all</a></div>
-  <p class="muted">Play the clips or download the original exports. Generate your own in the local ClipFarm app.</p>
+  <div class="actions"><a class="button primary" href="http://127.0.0.1:8765/">Open local generator</a>
+  <a class="button" href="clipfarm-clips.zip" download>Download example ZIP</a></div></div>
+  <p class="muted">These picks come from one example run. With ClipFarm running on your computer, open the generator to upload a recording or paste a public video link and choose up to 100 clips.</p>
   <section class="section"><h2>Ranked picks</h2><div class="grid">{''.join(cards)}</div></section>
 </main>
 <footer class="shell footer"><span>ClipFarm</span><span>{html.escape(credit)}</span></footer>

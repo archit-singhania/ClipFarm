@@ -1,32 +1,37 @@
-# Framefold implementation summary
+# ClipFarm implementation and release summary
 
-The local application was built from the empty ClipFarm checkout. The latest work chat supplied the automatic-first product intent. The implementation plan described the sequence and verification gates. The roadmap and atlas supplied release scope, states and visual references. Sample artefacts and estimates in those documents were treated as reference material.
+ClipFarm turns uploads and public recording links into downloadable clips on a local workstation. The generator offers targets of 3, 5, 10, 15, 20, 50 and 100. The public example links to the local generator and includes three HD excerpts from the *Sintel* trailer, credited to the Blender Foundation under CC BY 3.0. [Public example](https://clipfarm-screening-room.atsin2526.chatgpt.site) · [Local startup](README.md)
 
-| Tickets | Implementation and status |
-| --- | --- |
-| T01 | Inspected both public repositories, pinned commits and imported two narrow MIT utilities with notices. The upstream six-fixture benchmark still needs the six source videos and expected annotations. |
-| T02–T03 | Generator, direct HTTPS/upload inputs, export options, preview, My runs, durable scoped sources, idempotent jobs and progress. The single local worker uses a file lock and SQLite stage checkpoints. |
-| T04–T05 | Rules combine sustained motion, audio activity and speech boundaries, then filter temporal overlap and visually similar silent events. FFmpeg delivers verified individual MP4s, subtitle sidecars and ZIPs. One-action productive runs and the static negative case passed. The named ten-minute annotated tutorial remains to be tested. |
-| T06–T08 | Versioned candidate-feature export, labeling rubric, grouped LightGBM training, holdout calculations and checksum-validated local serving with fallback. Synthetic training and inference passed a smoke test. The rights-cleared corpus, human labels, coverage study and production model evaluation remain outstanding. |
-| T09–T10 | Ranked result cards, run detail, direct downloads and immutable optional copies. Three persisted themes, keyboard picker and responsive layouts. The browser checks cover keyboard theme selection and reload, plus mobile and desktop layout. Full zoom, assistive-technology and all-route theme matrix remain unverified. |
-| T11 | Burned captions, SRT/VTT, fit and center crop, five aspect ratios, HD/UHD and upscale labeling. A 2160 × 2160 revision passed. Subject tracking, soundtrack ducking and the complete UHD/media matrix remain open. |
-| T12 | Streaming imports, request/size/duration checks, pinned HTTPS with redirect validation, scoped downloads, checkpoint recovery, cancellation and retries. The full disk-failure and concurrent fault matrix and retention policy automation remain open. |
-| T13–T14 | Local startup, migrations, health status, cached offline speech path, reproducible fixture tests and static export tooling. Public publication, clean-machine verification, broader benchmarks, and production release evidence remain open. |
+## Roadmap delivery
 
-## Verification
+| Tickets | Delivered | Evidence and remaining qualification |
+| --- | --- | --- |
+| T01 | Pinned and attributed two MIT utilities, excluded the separate cloud implementation, and compared eligible upstream CPU rendering stages on six original fixtures. | Both upstreams rendered six prescribed cuts. Measurements cover local rendering. [Import audit](third_party/README.md) · [Benchmark](docs/media-benchmark.md) |
+| T02–T03 | Generator, upload and link imports, private source storage, normalized job settings, idempotent requests, one durable worker and resumable run views. | HTTP tests cover repeated requests, concurrent creation, refresh-compatible state, cancellation and worker restart. |
+| T04–T05 | Automatic selection from speech and visual/audio events, distinct source ranges, automatic reframing, speech captions, verified MP4s and batch downloads. | The 10-minute generated tutorial yielded three 1920 × 1080 captioned clips in 65.88 seconds on the benchmark M3. The silent static control returned zero. |
+| T06–T08 | Versioned signals, rights manifest, offline candidate review, genuine creator-rating capture/export and two source-grouped LightGBM training workflows. The Film-trailer model ships with a local portable scorer. | The pilot trained on 780 windows from two CC BY films. Seven intervals matched human-edited teasers. Held-out mean nDCG@3 was 0.000 for the pilot and 0.117 for rules. General highlights remains the default. Direct multi-genre creator ratings and the original promotion gate are open. [Model card](ml/editorial/MODEL_CARD.md) |
+| T09–T10 | ClipFarm branding, self-hosted Barlow Condensed and DM Sans, Charcoal/Forest/Navy palettes, a source monitor, results, downloads and independently rendered revisions. Theme choices persist across runs and tabs. | Browser checks passed for six application states, three themes and four viewport widths. The 24 automated accessibility scans included the open rating form. Keyboard focus, persistence, blocked storage, reduced motion, zoom, rating edits and JSONL downloads passed. Manual assistive-technology usability remains a separate check. [Browser checks](tests/browser/check.cjs) |
+| T11 | HD/UHD, five aspect ratios, full-frame fit, center crop, motion-guided subject tracking, timed subtitles and soundtrack ducking. | The render suite covers all ten ratio/resolution combinations with rotated variable-frame-rate input. It verifies crop position, audio attenuation and recovery, relative subtitle timing and the ambiguous-motion fallback. Native UHD sports footage yielded two 3840 × 2160 clips in 14.03 seconds. |
+| T12 | Scoped downloads, streamed staging, public-address checks on URL redirects, durable retry paths, disk checks and opt-in retention. | Tested interrupted imports, corrupt/audio-only inputs, private-address rejection, low-disk partial output, concurrent retry, cancellation, worker loss, scoped downloads and shared-source retention. |
+| T13–T14 | Local startup, schema upgrades, model checksums, cached offline rendering, public static deployment, rights notices and benchmark evidence. | A fresh project virtual environment passed the release checks on the development Mac. The public host serves finished assets. Independent clean-machine installation and a multi-creator field evaluation remain open. |
 
-Python syntax and JavaScript syntax checks passed. The integration suite drove the production API and worker on Apple Silicon with FFmpeg 8.1.2 and a local Whisper tiny English model. The media worker also passed with network access denied. Each MP4 in the integration checks was fully decoded after download. Source ranges are source-relative, start-inclusive/end-exclusive milliseconds.
+## Verification details
 
-| Input and path | Verified output |
-| --- | --- |
-| 22-second generated silent video, upload | Two H.264 1080 × 1920 MP4s, each 8.100 s, with different checksums, no audio stream and no captions. Source ranges 1.800–9.900 s and 12.800–20.900 s. |
-| Generated two-part spoken tutorial, upload | Two H.264 1080 × 1920 MP4s, 6.267 s and 6.300 s. Caption bounds 0.000–5.900 s and 0.250–5.930 s relative to the clips. |
-| W3C-hosted Sintel trailer, direct HTTPS in browser | One Generate action exposed three verified H.264 1080 × 1920 MP4s with source ranges, individual downloads and a ZIP control. Durations were 6.367 s, 4.600 s and 3.600 s. Each clip contains a timed caption. This was a short public movie fixture. |
-| Static color video, upload | Zero matches with an explanatory state. |
-| Local-network HTTPS address | Rejected before import. |
-| Interrupted silent run and repeated Generate request | Worker restarted during the render checkpoint. Verified outputs survived, and each repeated key returned the original job. |
-| Revision | Original artefact manifest preserved. A separate UHD square copy rendered successfully. |
+The test machine used Apple Silicon and FFmpeg 8.1.2. The integration client exercised range requests, attachment headers, sidecars, archives, owner scoping and immutable revisions through the production API. Production-style worker regression tests ran with network access denied.
 
-HTTP range playback, private download scope, attachment headers, SRT timing and ZIP contents were checked by the integration suite. Each intermediate artefact is private. A production model still requires human-reviewed training data. Test-only LightGBM features exercised the training and inference commands, with no performance claim.
+- The large-batch HTTP test uploaded a 2:02:24 synthetic recording over 1 GiB, requested 100 clips and verified 100 distinct HD exports against the checksums in the downloaded ZIP. The fixture uses a low source frame rate and a padded MP4 container to exercise duration and transfer size economically. Its render time is specific to that fixture. [End-to-end test](tests/test_workflow.py)
+- Live imports downloaded complete recordings with video and audio on YouTube, Twitch, Kick and Rumble. Pasting Blender’s 52-second trailer into the production API with a target of ten yielded five verified picks. Every MP4 in its ZIP matched its recorded checksum. A separate check resolved and read the media playlist for a 4:46:48 Twitch VOD. Availability varies by recording, region and provider. [Blender’s trailer](https://www.youtube.com/watch?v=HOfdboHvshg)
+- Long runs checkpoint five-minute windows and rank across the timeline. Tests cover restart recovery, a motion event after 02:00:00, delayed audio, and exporting labeled candidates from past and current jobs. [Long-recording tests](tests/test_long_analysis.py)
 
-The paused-render and media gates were verified using these small fixtures. The hardware cost of a longer HD or UHD source and real-world highlight quality remain to be measured. Build and launch instructions are in the README.
+- A silent upload produced two distinct portrait HD MP4s without dialogue captions. A two-part spoken tutorial produced two captioned HD MP4s.
+- In the controlled tracking fixture, the foreground object stayed within one sampled pixel of center at the checked timestamps. The measured background tone amplitude went from 0.02992 to 0.00229 during foreground audio and recovered to 0.02993.
+- A cut starting four seconds into a source retained the expected relative caption interval of 1.5–2.5 seconds. A soundtrack added audio to an originally silent clip.
+- The six-fixture benchmark measured 13 output clips in total. Its machine-readable results include file checksums, output dimensions and observed resource use. [Application measurements](docs/media-benchmark-results.json) · [Upstream measurements](docs/upstream-benchmark-results.json)
+- A fresh HTTPS import of the public *Sintel* trailer explicitly selected the packaged film model and rendered three 1080 × 1920 MP4s. The job recorded the shipped model checksum and the batch download succeeded.
+- The deployed public example contains a theme picker, three 1920 × 1080 MP4s and their download bundle. It contains no private originals, local sessions or rendering worker.
+
+## Remaining work with the largest impact
+
+1. **General highlight quality.** Collect independent, rights-cleared creator judgments across interview, sports, gaming, tutorial, music, silent, vlog and animation sources. The roadmap proposes 120 originals. Grade full candidate pools, keep alternate edits of each original together, compare against rules and evaluate boundary completeness as well as ranking.
+2. **Tracking and transcription in difficult scenes.** Test occlusion, competing subjects, moving cameras, noisy dialogue and long pauses on real footage. The current tracker follows a localized moving region and preserves the full frame when its evidence is weak. The long tutorial benchmark includes a pick that starts during a practice interval.
+3. **Independent release validation.** Repeat the installation and media checks on another machine, and have creators review crop composition, subtitle legibility and publishability. A live public service accepting arbitrary uploads would additionally need an authenticated hosted queue, quotas and persistent worker capacity.

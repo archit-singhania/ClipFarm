@@ -1,7 +1,8 @@
 "use strict";
 const main = document.querySelector("main");
 const announce = document.querySelector("#announce");
-const draft = { mode: "link", url: "", file: null, preview: "", key: null, busy: false, settings: {}, music: null, musicId: null };
+const draft = { mode: "link", url: "", file: null, preview: "", key: null, importLabel: "", importError: "", settings: {}, music: null, musicId: null };
+const clipTargets = [3, 5, 10, 15, 20, 50, 100];
 const activeStates = new Set(["queued", "running"]);
 const stages = [
   ["Prepare source", "Check the video and audio tracks."],
@@ -14,6 +15,21 @@ const labels = { queued: "Queued", running: "Processing", ready: "Ready", partia
 const escapeHTML = value => String(value ?? "").replace(/[&<>"']/g, char =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
 const seconds = ms => (ms / 1000).toFixed(3).replace(/\.?0+$/, "");
+function sourceDuration(ms) {
+  const total = Math.round(ms / 1000);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor(total / 60) % 60;
+  const parts = [];
+  if (hours) parts.push(hours + "h");
+  if (minutes) parts.push(minutes + "m");
+  if (total % 60 || !parts.length) parts.push(total % 60 + "s");
+  return parts.join(" ");
+}
+function readySummary(ready, originals, requested) {
+  const copies = ready - originals;
+  const extra = copies ? ` · ${copies} edited ${copies === 1 ? "copy" : "copies"}` : "";
+  return `${originals} of ${requested} requested clips ready${extra}`;
+}
 const uid = () => crypto.randomUUID();
 const runPath = id => `#/runs/${id}`;
 const api = async (path, options) => {
@@ -71,7 +87,37 @@ function formatOptions(values = {}, selectedMusic = null) {
 }
 function formSettings(form) {
   const data = new FormData(form);
-  return { ...(data.has("selector") ? { selector: data.get("selector") } : {}), ratio: data.get("ratio"), quality: data.get("quality"), framing: data.get("framing"), captions: data.has("captions") };
+  return { ...(data.has("count") ? { count: Number(data.get("count")) } : {}),
+    ...(data.has("selector") ? { selector: data.get("selector") } : {}),
+    ratio: data.get("ratio"), quality: data.get("quality"), framing: data.get("framing"), captions: data.has("captions") };
+}
+function importLabel(message) {
+  draft.importLabel = message;
+  const form = main.querySelector("#generate");
+  if (!form) return;
+  form.querySelector(".generator-controls").disabled = Boolean(message);
+  form.querySelector("[type=submit]").textContent = message || "Generate clips →";
+  form.setAttribute("aria-busy", String(Boolean(message)));
+  if (message && !message.endsWith("%")) announce.textContent = message;
+}
+function uploadVideo(file) {
+  return new Promise((resolve, reject) => {
+    const upload = new XMLHttpRequest();
+    upload.open("POST", "/api/sources");
+    upload.responseType = "json";
+    upload.setRequestHeader("Content-Type", "application/octet-stream");
+    upload.setRequestHeader("X-File-Name", encodeURIComponent(file.name));
+    upload.upload.onprogress = event => {
+      if (event.lengthComputable) importLabel(`Uploading video · ${Math.floor(event.loaded * 100 / event.total)}%`);
+    };
+    upload.upload.onload = () => importLabel("Checking video…");
+    upload.onload = () => {
+      if (upload.status >= 200 && upload.status < 300 && upload.response?.id) resolve(upload.response);
+      else reject(new Error(upload.response?.error || "The video upload failed. Try again."));
+    };
+    upload.onerror = () => reject(new Error("The upload was interrupted. Reconnect and try again."));
+    upload.send(file);
+  });
 }
 async function soundtrack(file) {
   const uploaded = await api("music", { method: "POST", body: file, headers: {
@@ -83,26 +129,33 @@ function generator() {
   main.innerHTML = `<section class="split generator">
     <div class="form-wrap"><h1>Clip <em>generator</em></h1>
     <p class="lede">Find the highlights in your footage. Cut, reframe, and caption them in one run.</p>
-    <form id="generate">
+    <form id="generate"><fieldset class="generator-controls"><legend class="sr-only">New clip run</legend>
       <div class="modes" role="group" aria-label="Source type">
         <button type="button" data-mode="link" aria-pressed="${draft.mode === "link"}"><span class="link-icon" aria-hidden="true">↗</span> Video link</button>
         <button type="button" data-mode="upload" aria-pressed="${draft.mode === "upload"}"><span aria-hidden="true">↑</span> Upload file</button>
       </div>
       <div class="field" ${draft.mode !== "link" ? "hidden" : ""}>
-        <label class="sr-only" for="link">Direct HTTPS video link</label>
-        <input id="link" type="url" placeholder="Paste a direct video URL…" value="${escapeHTML(draft.url)}" autocomplete="off" ${draft.mode !== "link" ? "disabled" : "required"}>
+        <label class="sr-only" for="link">Public video link</label>
+        <input id="link" type="text" inputmode="url" placeholder="Paste a public video URL…" value="${escapeHTML(draft.url)}" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="link-hint" required ${draft.mode !== "link" ? "disabled" : ""}>
+        <span class="field-hint" id="link-hint">Paste a recording from YouTube, Twitch, Kick, Rumble or another supported site, or a direct HTTPS video link.</span>
       </div>
       <div class="field" ${draft.mode !== "upload" ? "hidden" : ""}><label class="sr-only" for="upload">Choose a video</label>
-        <input id="upload" type="file" accept="video/*,.mkv,.mov,.webm"><span class="meta wrap" id="file-name">${escapeHTML(draft.file?.name)}</span>
+        <input id="upload" type="file" accept="video/*,.mkv,.mov,.webm,.avi,.flv,.m4v,.ts,.m2ts,.mpeg,.mpg,.ogv" aria-describedby="upload-hint"><span class="meta wrap" id="file-name">${escapeHTML(draft.file?.name)}</span>
+        <span class="field-hint" id="upload-hint">Choose a recording of any length. Keep this tab open until the upload finishes.</span>
       </div>
-      <div class="actions generate-actions"><button class="primary" type="submit"${draft.busy ? " disabled" : ""}>${draft.busy ? "Importing video…" : "Generate clips →"}</button>
+      <fieldset class="clip-target" aria-describedby="target-hint"><legend>Clip target</legend>
+        <div class="target-choices">${clipTargets.map(count =>
+          `<label><input type="radio" name="count" value="${count}"${count === (draft.settings.count || 3) ? " checked" : ""}><span>${count}</span></label>`).join("")}</div>
+        <p class="field-hint" id="target-hint">ClipFarm exports up to your target, depending on how many distinct highlights it finds.</p>
+      </fieldset>
+      <div class="actions generate-actions"><button class="primary" type="submit">Generate clips →</button>
       </div>
       <details class="settings"><summary><span>Export settings</span><span class="meta" id="preset-label"></span></summary>${formatOptions(draft.settings, draft.music)}
         <div class="field"><label for="selector">Highlight selection</label>
         <select name="selector" id="selector"><option value="auto">General highlights</option>
           <option value="editorial"${draft.settings.selector === "editorial" ? " selected" : ""}>Experimental film-trailer model</option>
         </select></div></details>
-      <p role="alert" class="error"></p>
+      </fieldset><p role="alert" class="error">${escapeHTML(draft.importError)}</p>
     </form></div><div id="generator-preview"></div>
   </section><section class="section"><div class="heading-row"><h2>Recent clips</h2><a class="text-action" href="#/runs">View all runs <span aria-hidden="true">↗</span></a></div><div id="recent"></div></section>`;
   const form = main.querySelector("form");
@@ -142,6 +195,7 @@ function generator() {
   form.querySelector("#upload").disabled = draft.mode !== "upload";
   showPreview();
   preset();
+  importLabel(draft.importLabel);
   form.addEventListener("change", event => {
     if (event.target.id === "music") {
       draft.music = event.target.files[0] || null;
@@ -163,7 +217,7 @@ function generator() {
     draft.key = null;
   });
   form.querySelectorAll("[data-mode]").forEach(button => button.addEventListener("click", () => {
-    if (draft.busy || draft.mode === button.dataset.mode) return;
+    if (draft.importLabel || draft.mode === button.dataset.mode) return;
     draft.mode = button.dataset.mode;
     draft.key = null;
     for (const mode of form.querySelectorAll("[data-mode]")) mode.setAttribute("aria-pressed", mode === button);
@@ -176,8 +230,7 @@ function generator() {
   }));
   form.addEventListener("submit", async event => {
     event.preventDefault();
-    if (draft.busy) return;
-    const submit = form.querySelector("[type=submit]");
+    if (draft.importLabel) return;
     const error = form.querySelector("[role=alert]");
     error.textContent = "";
     if (draft.mode === "upload" && !draft.file) {
@@ -185,30 +238,36 @@ function generator() {
       form.querySelector("#upload").focus();
       return;
     }
-    draft.busy = submit.disabled = true;
+    draft.importError = "";
     const key = draft.key ||= uid();
     const music = draft.music;
     const options = formSettings(form);
-    submit.textContent = "Importing video…";
+    importLabel(draft.mode === "link" ? "Finding and downloading video…" : "Uploading video…");
     try {
-      const source = draft.mode === "link" ? await post("sources", { url: draft.url.trim() })
-        : await api("sources", { method: "POST", body: draft.file,
-          headers: { "Content-Type": "application/octet-stream", "X-File-Name": encodeURIComponent(draft.file.name) } });
+      let source;
+      if (draft.mode === "link") {
+        const value = draft.url.trim();
+        const url = /^[a-z][a-z\d+.-]*:/i.test(value) ? value : "https://" + value.replace(/^\/\//, "");
+        source = await post("sources", { url });
+      } else {
+        source = await uploadVideo(draft.file);
+      }
       if (music) {
-        submit.textContent = "Importing music…";
+        importLabel("Importing music…");
         options.music_id = draft.musicId || await soundtrack(music);
         if (music === draft.music) draft.musicId = options.music_id;
       }
+      importLabel("Creating run…");
       const job = await post("jobs", { source: source.id, key, settings: options });
       if (draft.preview) URL.revokeObjectURL(draft.preview);
       Object.assign(draft, { url: "", file: null, preview: "", key: null, music: null, musicId: null });
       location.hash = runPath(job.id);
     } catch (err) {
-      alertMessage(err, error);
-      submit.focus();
+      draft.importError = err.message;
+      alertMessage(err, main.querySelector("#generate [role=alert]"));
     } finally {
-      draft.busy = submit.disabled = false;
-      submit.textContent = "Generate clips →";
+      importLabel("");
+      if (draft.importError) main.querySelector("#generate [type=submit]")?.focus();
     }
   });
   const recent = main.querySelector("#recent");
@@ -229,7 +288,7 @@ function card(clip, name) {
   const title = escapeHTML(clipTitle(clip, name));
   const ready = clip.state === "ready";
   return `<article class="card" data-clip="${clip.id}">
-    ${ready ? `<div class="card-art"><video controls playsinline preload="metadata" src="${root}/play"${clip.artifact.poster ? ` poster="${root}/poster"` : ""} aria-label="${title}"></video>
+    ${ready ? `<div class="card-art"><video controls playsinline preload="none" src="${root}/play"${clip.artifact.poster ? ` poster="${root}/poster"` : ""} aria-label="${title}"></video>
     <span class="badge">${seconds(clip.end_ms - clip.start_ms)} s</span></div>` : ""}
     <div class="card-body"><h3 class="wrap">${title}</h3>
     <p class="meta">${clip.range_label} · ${clip.options.ratio}
@@ -257,9 +316,13 @@ function sync(container, html) {
 }
 function runView(job) {
   const active = activeStates.has(job.state);
-  const ready = job.clips.filter(clip => clip.state === "ready").length;
+  const readyClips = job.clips.filter(clip => clip.state === "ready");
+  const ready = readyClips.length;
+  const requested = job.settings.count ?? 3;
+  const originals = readyClips.filter(clip => !clip.parent).length;
+  const summary = readySummary(ready, originals, requested);
   const displayedState = active && !job.online ? "Waiting for the worker" : labels[job.state];
-  const caption = `${job.name} · ${Math.round(job.metadata.duration_ms / 1000)}s source · ${ready ? `${ready} ready to download` : displayedState}`;
+  const caption = `${job.name} · ${sourceDuration(job.metadata.duration_ms)} source · ${summary}`;
   const title = active ? "Making your <em>clips.</em>" : ready ? "Your <em>clips.</em>" : "Run <em>summary.</em>";
   sync(main.querySelector("#run-heading"), title);
   const filmSelection = job.settings.selector === "editorial" && job.stage >= 3 && job.clips.length;
@@ -283,6 +346,7 @@ function runView(job) {
   }
   const status = main.querySelector("#run-status");
   const message = {
+    ready: originals < requested ? "The run finished with fewer distinct highlights than requested." : "",
     partial: "Verified clips are available. Retry a failed clip from its card.",
     failed: job.error || "The worker could not export these clips. Retry any failed clip below.",
     cancelled: "Generation stopped. Previously verified clips remain available.",
@@ -296,10 +360,9 @@ function runView(job) {
   // Preserve playing videos and keyboard focus when adjacent clips become ready.
   for (const clip of job.clips) {
     const existing = grid.querySelector(`[data-clip="${clip.id}"]`);
-    const html = card(clip, job.name);
     if (existing?.dataset.renderState === clip.state) continue;
     const template = document.createElement("template");
-    template.innerHTML = html;
+    template.innerHTML = card(clip, job.name);
     const node = template.content.firstElementChild;
     node.dataset.renderState = clip.state;
     if (existing) existing.replaceWith(node);
@@ -308,7 +371,7 @@ function runView(job) {
   const messageKey = `${job.id}:${displayedState}:${job.stage}:${ready}`;
   if (announce.dataset.last !== messageKey) {
     announce.dataset.last = messageKey;
-    announce.textContent = `${displayedState}.${active && job.stage ? " " + stages[job.stage-1][0] + "." : ""} ${ready} clips ready.`;
+    announce.textContent = `${displayedState}.${active && job.stage ? " " + stages[job.stage-1][0] + "." : ""} ${summary}.`;
   }
 }
 function reviewForm(job, clip) {
@@ -471,7 +534,7 @@ async function route(navigate = false) {
     api("jobs").then(jobs => {
       if (token !== turn) return;
       main.querySelector("#history").innerHTML = jobs.length ? jobs.map(job =>
-        `<div class="run-row"><a href="${runPath(job.id)}">${escapeHTML(job.name)}</a><span class="run-meta"><span class="run-state">${labels[job.state]}</span><span class="meta">${job.ready} ready</span></span></div>`
+        `<div class="run-row"><a href="${runPath(job.id)}">${escapeHTML(job.name)}</a><span class="run-meta"><span class="run-state">${labels[job.state]}</span><span class="meta">${readySummary(job.ready, job.ready_originals, job.requested)}</span></span></div>`
       ).join("") : '<div class="empty">No runs yet. <a href="#/">Generate your first clips</a>.</div>';
     }).catch(error => { if (token === turn) alertMessage(error); });
   }
