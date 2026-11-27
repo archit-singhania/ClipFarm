@@ -29,7 +29,7 @@ def save_window(db, source, metadata, directory, start, end):
         ))
 
 
-def score_window(db, start, size, duration, selector):
+def score_window(db, start, size, duration, selector, preference=None):
     # Use an entire neighbor on each side so events, pauses and captions
     # can straddle a decoder window. The midpoint owns the proposal.
     origin = max(0, start-size)
@@ -37,7 +37,7 @@ def score_window(db, start, size, duration, selector):
     records = db.execute("SELECT start,signals FROM windows WHERE start>=? AND start<? ORDER BY start",
                          (origin, stop))
     signals = media.combine((at-origin, json.loads(zlib.decompress(blob))) for at, blob in records)
-    candidates = [row for row in media.propose(signals, stop-origin)
+    candidates = [row for row in media.propose(signals, stop-origin, preference)
                   if start <= origin+(row[0]+row[1])//2 < start+size]
     ordered, version = rank(signals, candidates, selector)
     with db:
@@ -51,7 +51,7 @@ def score_window(db, start, size, duration, selector):
                    (version if ordered else None, start))
 
 
-def build(source, metadata, directory, selector, is_cancelled):
+def build(source, metadata, directory, selector, is_cancelled, preference=None):
     """Checkpoint each decoded window, then score candidates with neighboring context."""
     duration = metadata["duration_ms"]
     with closing(sqlite3.connect(index_path(directory))) as db:
@@ -84,7 +84,7 @@ def build(source, metadata, directory, selector, is_cancelled):
                 return None
             if db.execute("SELECT scored FROM windows WHERE start=?", (start,)).fetchone()[0]:
                 continue
-            score_window(db, start, size, duration, selector)
+            score_window(db, start, size, duration, selector, preference)
         versions = db.execute("SELECT DISTINCT selector FROM windows WHERE selector IS NOT NULL").fetchall()
         if len(versions) > 1:
             raise ValueError("The highlight model changed during analysis. Start a new run with one selector.")
@@ -118,7 +118,7 @@ def candidate_features(path, duration, match=None):
             for a, b, reason, vector in db.execute(sql + " ORDER BY start,end,reason", match or ()):
                 yield a, b, reason, json.loads(vector)
     else:
-        for row in media.propose(analysis, duration):
+        for row in media.propose(analysis, duration, analysis.get("duration")):
             a, b, _, reason = row
             if match is None or (a, b, reason) == match:
                 yield a, b, reason, features(analysis, row)

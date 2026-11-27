@@ -274,6 +274,30 @@ class Workflow(unittest.TestCase):
         self.assertEqual(len(recovered["clips"]), len(run["clips"]))
         self.assertEqual(self.read(f"/api/jobs/{uid}")["state"], "cancelled")
 
+    def test_exact_long_run_and_edited_copy(self):
+        source = self.root / "long-exact.mp4"
+        ffmpeg("-f","lavfi","-i","testsrc2=s=64x48:r=4:d=123","-c:v","libx264",str(source))
+        imported = self.upload(source)
+        with self.assertRaises(urllib.error.HTTPError) as failure:
+            self.start(imported,"too-short",{"duration":{"mode":"exact","target_ms":180000}})
+        self.assertEqual(failure.exception.code,400)
+        pref = {"mode":"exact","target_ms":120000}
+        uid = self.start(imported,"two-minutes",{"duration":pref,"count":1})
+        run = self.wait(uid)
+        self.assertEqual(run["settings"]["duration"],pref)
+        clip, = run["clips"]
+        self.assertEqual(clip["state"],"ready",clip["error"])
+        self.assertLessEqual(abs(clip["artifact"]["duration_ms"]-120000),50)
+        self.read(f"/api/clips/{clip['id']}/revisions",{"start_ms":1000,"end_ms":93000})
+        final = self.wait(uid)
+        copy, = [c for c in final["clips"] if c["parent"]]
+        self.assertLessEqual(abs(copy["artifact"]["duration_ms"]-92000),50)
+        self.assertEqual(copy["artifact"]["width"],1080)
+        for endpoint in (f"/api/clips/{clip['id']}/play",f"/api/clips/{copy['id']}/download",f"/api/jobs/{uid}/download"):
+            with self.request(endpoint) as response:
+                self.assertEqual(response.status,200)
+                self.assertTrue(response.read())
+
     def test_static_and_invalid_link(self):
         source = self.root / "Static.mp4"
         ffmpeg("-f", "lavfi", "-i", "color=sandybrown:s=320x240:d=7", "-c:v", "libx264", str(source))

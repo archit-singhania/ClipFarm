@@ -98,6 +98,23 @@ class RecordingImport(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported"):
             providers.RecordingHlsFD.can_download('#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES\n#EXT-X-ENDLIST', {})
 
+    def test_25_minute_recording_selects_smaller_combined_format(self):
+        large = {"vcodec": "avc1", "acodec": "none", "tbr": 16000}
+        audio = {"vcodec": "none", "acodec": "aac", "tbr": 128}
+        small = {"vcodec": "avc1", "acodec": "aac", "tbr": 1500}
+        info = {"duration": 1500, "requested_formats": [large, audio],
+                "formats": [small, audio, large]}
+        with patch.object(providers.shutil, "disk_usage", return_value=MagicMock(free=4*1024**3)):
+            self.assertEqual(providers.fitting_tracks(info, self.root), [small])
+
+        with patch.object(providers.shutil, "disk_usage", return_value=MagicMock(free=imports.RESERVE+100)):
+            with self.assertRaises(imports.StorageError):
+                providers.fitting_tracks(info, self.root)
+        silent = dict(large, tbr=1000)
+        with patch.object(providers.shutil, "disk_usage", return_value=MagicMock(free=1024**3)):
+            self.assertEqual(providers.fitting_tracks(dict(large, duration=1500, formats=[silent, large]),
+                                                      self.root), [silent])
+
     def test_large_upload_and_storage_preflight(self):
         metadata = {"format": "mov,mp4", "duration_ms": 30 * 3600 * 1000}
         with patch.object(imports, "probe", return_value=metadata):

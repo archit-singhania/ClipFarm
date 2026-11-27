@@ -10,11 +10,12 @@
   <link rel="stylesheet" href="/style.css">
   <script src="/app.js" defer></script>
 </head>
-<body>
+<body class="workspace">
   <a class="skip" href="#main">Skip to content</a>
   <header class="top"><div class="shell bar">
     <a class="brand" href="#/" aria-label="ClipFarm home"><span class="mark" aria-hidden="true"></span>ClipFarm</a>
-    <nav aria-label="Main"><a id="nav-generate" href="#/">Generator</a><a id="nav-runs" href="#/runs">My runs</a></nav>
+    <a class="button primary rail-new" href="#/">New run</a>
+    <nav aria-label="Main"><a id="nav-generate" href="#/"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="m10 8 6 4-6 4z"/></svg>Generator</a><a id="nav-runs" href="#/runs"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M7 9h10M7 14h7"/></svg>My runs</a></nav>
     <div class="header-actions">
       <span id="worker" class="worker"><span class="indicator" aria-hidden="true"></span><span id="worker-label">Checking worker</span></span>
       <button type="button" id="theme-button" aria-expanded="false" aria-controls="theme-picker"><span class="palette-icon" aria-hidden="true"></span>Theme</button>
@@ -25,6 +26,7 @@
       </div>
     </div>
   </div></header>
+  <div class="context-bar"><span>Local workspace</span><span id="context">Generator</span></div>
   <main id="main" class="shell" tabindex="-1"></main>
   <div id="announce" class="sr-only" aria-live="polite"></div>
   <footer class="shell footer"><span>ClipFarm</span><span>Local video workspace</span></footer>

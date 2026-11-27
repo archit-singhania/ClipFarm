@@ -33,7 +33,13 @@ function readySummary(ready, originals, requested) {
 const uid = () => crypto.randomUUID();
 const runPath = id => `#/runs/${id}`;
 const api = async (path, options) => {
-  const response = await fetch(`/api/${path}`, options);
+  let response;
+  try {
+    response = await fetch(`/api/${path}`, options);
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error;
+    throw new Error("Lost connection to ClipFarm. Check that the local server is running, then retry.");
+  }
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || "This action failed. Try again.");
   return result;
@@ -85,9 +91,51 @@ function formatOptions(values = {}, selectedMusic = null) {
       ${values.music_id ? '<label class="check"><input type="checkbox" name="remove_music"> Remove existing soundtrack</label>' : ""}
     </div></div>`;
 }
+const lengths = [10,15,20,30,40,45,60,90,120,180,300];
+function exportSize(settings) {
+  const base = {"9:16":[1080,1920],"16:9":[1920,1080],"1:1":[1080,1080],"4:5":[1080,1350],"3:4":[1080,1440]};
+  return base[settings.ratio].map(x => x * (settings.quality === "UHD" ? 2 : 1)).join(" × ");
+}
+function durationLabel(pref) {
+  if (!pref) return "Auto length";
+  if (pref.mode === "range") return `${pref.min_ms/1000}–${pref.max_ms/1000}s range`;
+  return `${pref.target_ms/1000}s ${pref.mode}`;
+}
+function durationControls() {
+  const state = draft.durationForm || {};
+  const options = (items, value) => items.map(([id,name]) =>
+    `<option value="${id}"${String(id) === String(value) ? " selected" : ""}>${name}</option>`).join("");
+  const clock = (key,label,initial) => `<fieldset data-clock="${key}"><legend>${label}</legend>${["Minutes","Seconds"].map((unit,i) => {
+    const name = key + unit;
+    return `<label>${unit}<input type="number" name="${name}" min="0" max="${i ? 59 : 5}" required value="${Number(state[name] ?? (i ? initial : 0))}"></label>`;
+  }).join("")}</fieldset>`;
+  return `<fieldset class="duration-controls"><legend>Clip duration</legend><label>Length<select name="lengthPreset" aria-label="Length">${options([["auto","Auto"],...lengths.map(n=>[n,n>=120 && n%60===0 ? n/60+" min" : n+"s"]),["custom","Custom"]],state.lengthPreset)}</select></label>
+    <label data-mode-field>Duration mode<select name="lengthMode" aria-label="Duration mode">${options([["target","Target"],["exact","Exact"],["range","Range"]],state.lengthMode)}</select></label>
+    ${clock("target","Custom length",30)}${clock("min","Minimum",10)}${clock("max","Maximum",45)}</fieldset>`;
+}
+function readDuration(form) {
+  const e = form.elements;
+  const preset = e.lengthPreset.value, mode = e.lengthMode.value;
+  const field = form.querySelector("[data-mode-field]");
+  field.hidden = preset === "auto";
+  e.lengthMode.disabled = field.hidden;
+  for (const clock of form.querySelectorAll("[data-clock]")) {
+    clock.hidden = preset === "auto" || (clock.dataset.clock === "target" ? preset !== "custom" || mode === "range" : mode !== "range");
+    clock.disabled = clock.hidden;
+  }
+  const ms = key => (Number(e[key+"Minutes"].value)*60 + Number(e[key+"Seconds"].value))*1000;
+  const duration = preset === "auto" ? null : mode === "range" ? {mode,min_ms:ms("min"),max_ms:ms("max")} :
+    {mode,target_ms:preset === "custom" ? ms("target") : Number(preset)*1000};
+  const rangeInvalid = duration && mode === "range" && (duration.min_ms < 1000 || duration.max_ms > 300000 || duration.min_ms > duration.max_ms);
+  e.maxSeconds.setCustomValidity(rangeInvalid ? "Choose an ordered range from 1 to 300 seconds." : "");
+  e.targetSeconds.setCustomValidity(duration && mode !== "range" && (duration.target_ms < 1000 || duration.target_ms > 300000) ? "Choose 1 to 300 seconds." : "");
+  draft.durationForm = Object.fromEntries(Array.from(form.querySelectorAll(".duration-controls input, .duration-controls select"), control => [control.name, control.value]));
+  return duration ? {duration} : {};
+}
+
 function formSettings(form) {
   const data = new FormData(form);
-  return { ...(data.has("count") ? { count: Number(data.get("count")) } : {}),
+  return { ...(form.elements.lengthPreset ? readDuration(form) : {}), ...(data.has("count") ? { count: Number(data.get("count")) } : {}),
     ...(data.has("selector") ? { selector: data.get("selector") } : {}),
     ratio: data.get("ratio"), quality: data.get("quality"), framing: data.get("framing"), captions: data.has("captions") };
 }
@@ -135,28 +183,29 @@ function generator() {
         <button type="button" data-mode="upload" aria-pressed="${draft.mode === "upload"}"><span aria-hidden="true">↑</span> Upload file</button>
       </div>
       <div class="field" ${draft.mode !== "link" ? "hidden" : ""}>
-        <label class="sr-only" for="link">Public video link</label>
+        <label for="link">Public video link</label>
         <input id="link" type="text" inputmode="url" placeholder="Paste a public video URL…" value="${escapeHTML(draft.url)}" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="link-hint" required ${draft.mode !== "link" ? "disabled" : ""}>
         <span class="field-hint" id="link-hint">Paste a recording from YouTube, Twitch, Kick, Rumble or another supported site, or a direct HTTPS video link.</span>
       </div>
-      <div class="field" ${draft.mode !== "upload" ? "hidden" : ""}><label class="sr-only" for="upload">Choose a video</label>
+      <div class="field" ${draft.mode !== "upload" ? "hidden" : ""}><label for="upload">Choose a video</label>
         <input id="upload" type="file" accept="video/*,.mkv,.mov,.webm,.avi,.flv,.m4v,.ts,.m2ts,.mpeg,.mpg,.ogv" aria-describedby="upload-hint"><span class="meta wrap" id="file-name">${escapeHTML(draft.file?.name)}</span>
         <span class="field-hint" id="upload-hint">Choose a recording of any length. Keep this tab open until the upload finishes.</span>
       </div>
+      ${durationControls()}
       <fieldset class="clip-target" aria-describedby="target-hint"><legend>Clip target</legend>
         <div class="target-choices">${clipTargets.map(count =>
           `<label><input type="radio" name="count" value="${count}"${count === (draft.settings.count || 3) ? " checked" : ""}><span>${count}</span></label>`).join("")}</div>
         <p class="field-hint" id="target-hint">ClipFarm exports up to your target, depending on how many distinct highlights it finds.</p>
       </fieldset>
-      <div class="actions generate-actions"><button class="primary" type="submit">Generate clips →</button>
-      </div>
       <details class="settings"><summary><span>Export settings</span><span class="meta" id="preset-label"></span></summary>${formatOptions(draft.settings, draft.music)}
         <div class="field"><label for="selector">Highlight selection</label>
         <select name="selector" id="selector"><option value="auto">General highlights</option>
           <option value="editorial"${draft.settings.selector === "editorial" ? " selected" : ""}>Experimental film-trailer model</option>
-        </select></div></details>
+        </select></div></details>      <div class="actions generate-actions"><button class="primary" type="submit">Generate clips →</button>
+      </div>
+
       </fieldset><p role="alert" class="error">${escapeHTML(draft.importError)}</p>
-    </form></div><div id="generator-preview"></div>
+    </form></div><aside><div id="generator-preview"></div><div class="config-summary"><h2>Output</h2><p id="output-summary"></p></div></aside>
   </section><section class="section"><div class="heading-row"><h2>Recent clips</h2><a class="text-action" href="#/runs">View all runs <span aria-hidden="true">↗</span></a></div><div id="recent"></div></section>`;
   const form = main.querySelector("form");
   form.querySelector("#clear-music")?.addEventListener("click", event => {
@@ -185,14 +234,26 @@ function generator() {
       guideVisible = !guideVisible;
       updateGuide();
     });
+    preview.querySelector("video")?.addEventListener("loadedmetadata", event => {
+      const video = event.target;
+      if (Number.isFinite(video.duration)) preview.querySelector("figcaption").textContent =
+        draft.file.name + " · " + sourceDuration(Math.round(video.duration*1000)) + " · " + video.videoWidth + " × " + video.videoHeight;
+    });
     updateGuide();
   };
   const preset = () => {
     draft.settings = formSettings(form);
+    main.querySelector("#output-summary").textContent = [draft.settings.count+" clips",durationLabel(draft.settings.duration),draft.settings.ratio,exportSize(draft.settings),draft.settings.quality].join(" · ");
     updateGuide();
     main.querySelector("#preset-label").textContent = `${draft.settings.ratio} · ${draft.settings.quality === "HD" ? "1080p" : "UHD"}${draft.settings.captions ? " · Auto captions" : ""}`;
   };
   form.querySelector("#upload").disabled = draft.mode !== "upload";
+  form.addEventListener("input", event => {
+    if (event.target.name === "lengthMode" && event.target.value === "range") form.elements.lengthPreset.value = "custom";
+    if (event.target.name === "lengthPreset" && event.target.value !== "custom" && form.elements.lengthMode.value === "range") form.elements.lengthMode.value = "target";
+    draft.key = null;
+    if (!draft.importLabel) preset();
+  });
   showPreview();
   preset();
   importLabel(draft.importLabel);
@@ -289,10 +350,10 @@ function card(clip, name) {
   const ready = clip.state === "ready";
   return `<article class="card" data-clip="${clip.id}">
     ${ready ? `<div class="card-art"><video controls playsinline preload="none" src="${root}/play"${clip.artifact.poster ? ` poster="${root}/poster"` : ""} aria-label="${title}"></video>
-    <span class="badge">${seconds(clip.end_ms - clip.start_ms)} s</span></div>` : ""}
+    <span class="badge">${seconds(clip.artifact.duration_ms)} s</span></div>` : ""}
     <div class="card-body"><h3 class="wrap">${title}</h3>
     <p class="meta">${clip.range_label} · ${clip.options.ratio}
-    ${ready ? ` · ${clip.artifact.width} × ${clip.artifact.height}${clip.artifact.upscale ? " · Upscaled" : ""}` : ""}</p>
+    ${ready ? ` · ${clip.artifact.width} × ${clip.artifact.height}${clip.artifact.captions ? " · Captioned" : ""}${clip.artifact.upscale ? " · Upscaled" : ""}` : ""}</p>
     <p>${escapeHTML(clip.reason)}</p>
     ${ready ? `<div class="actions"><a class="button" href="${root}/download" aria-label="Download ${title}">↓ Download</a>
     <a href="${runPath(clip.job)}/${clip.id}">Details ↗</a></div>`
@@ -306,7 +367,7 @@ function runSkeleton() {
     <section id="run-progress" class="section split" hidden><div id="source-preview"></div>
     <div><h2>Run progress</h2><ol class="progress"></ol></div></section>
     <section id="run-status" hidden class="status"></section>
-    <section id="run-results" class="section" hidden><div class="heading-row"><h2 id="results-heading">Ranked picks</h2><span class="meta">MP4 · H.264</span></div><div class="grid"></div></section>`;
+    <section id="run-results" class="section" hidden><div class="heading-row"><h2 id="results-heading">Ranked picks</h2><label>Show <select id="clip-filter"><option value="all">All clips</option><option value="ready">Ready</option><option value="failed">Failed</option><option value="copies">Edited copies</option></select></label></div><div class="grid"></div></section>`;
 }
 function sync(container, html) {
   if (container.dataset.content !== html) {
@@ -322,7 +383,7 @@ function runView(job) {
   const originals = readyClips.filter(clip => !clip.parent).length;
   const summary = readySummary(ready, originals, requested);
   const displayedState = active && !job.online ? "Waiting for the worker" : labels[job.state];
-  const caption = `${job.name} · ${sourceDuration(job.metadata.duration_ms)} source · ${summary}`;
+  const caption = `${job.name} · ${sourceDuration(job.metadata.duration_ms)} source · ${summary} · ${durationLabel(job.settings.duration)} · ${job.settings.ratio} ${job.settings.quality} · ${labels[job.state]}`;
   const title = active ? "Making your <em>clips.</em>" : ready ? "Your <em>clips.</em>" : "Run <em>summary.</em>";
   sync(main.querySelector("#run-heading"), title);
   const filmSelection = job.settings.selector === "editorial" && job.stage >= 3 && job.clips.length;
@@ -368,6 +429,13 @@ function runView(job) {
     if (existing) existing.replaceWith(node);
     else grid.append(node);
   }
+  const filter = results.querySelector("#clip-filter");
+  const applyFilter = () => {
+    for (const clip of job.clips) grid.querySelector(`[data-clip="${clip.id}"]`).hidden =
+      filter.value !== "all" && (filter.value === "copies" ? !clip.parent : clip.state !== filter.value);
+  };
+  filter.onchange = applyFilter;
+  applyFilter();
   const messageKey = `${job.id}:${displayedState}:${job.stage}:${ready}`;
   if (announce.dataset.last !== messageKey) {
     announce.dataset.last = messageKey;
@@ -449,15 +517,33 @@ function detail(job, clip) {
       <video class="detail-video" controls playsinline preload="metadata" src="/api/clips/${clip.id}/play"${clip.artifact.poster ? ` poster="/api/clips/${clip.id}/poster"` : ""} aria-label="${title}"></video>
       <div><h2>Why this clip</h2><p>${escapeHTML(clip.reason)}</p>
       ${clip.artifact.captions ? `<div class="actions"><a class="button" href="/api/clips/${clip.id}/srt">↓ SRT</a><a class="button" href="/api/clips/${clip.id}/vtt">↓ VTT</a></div>` : ""}
-      ${reviewForm(job, clip)}
-      <div class="section"><h2>Optional adjustments</h2><form id="revision">
+      <p class="field-hint">The player shows the verified export. Save a copy to render your changes.</p>
+      <div class="section"><h2>Edit a copy</h2><form id="revision">
       <fieldset class="options"><legend>Source range</legend>
+      <svg class="trim-strip" viewBox="0 0 100 4" preserveAspectRatio="none" aria-hidden="true"><rect width="100" height="4"/><rect id="trim-span" height="4"/></svg>
+      <output id="trim-length" for="start end"></output>
       <div class="field"><label for="start">Start (seconds)</label><input id="start" type="number" name="start" min="0" max="${seconds(job.metadata.duration_ms)}" step="0.001" value="${seconds(clip.start_ms)}" required></div>
       <div class="field"><label for="end">End (seconds)</label><input id="end" type="number" name="end" min="0" max="${seconds(job.metadata.duration_ms)}" step="0.001" value="${seconds(clip.end_ms)}" required></div></fieldset>
       <fieldset><legend>Export</legend>${formatOptions(clip.options)}</fieldset>
-      <button class="primary" type="submit">Save a copy</button></form></div></div></section>`
+      <button class="primary" type="submit">Save edited copy</button></form></div>${reviewForm(job, clip)}</div></section>`
       : `<div class="status">${escapeHTML(clip.error || "This copy is waiting to render.")}
       ${clip.state === "failed" ? `<button type="button" data-retry="${clip.id}">Retry clip</button>` : ""}</div>`}`;
+  const editor = main.querySelector("#revision");
+  if (editor) {
+    const updateTrim = () => {
+      const start = Math.round(editor.elements.start.valueAsNumber*1000);
+      const end = Math.round(editor.elements.end.valueAsNumber*1000);
+      const total = job.metadata.duration_ms;
+      const valid = start >= 0 && end <= total && end-start >= 1000 && end-start <= 300000;
+      editor.elements.end.setCustomValidity(valid ? "" : "Choose 1 to 300 seconds inside the source.");
+      const strip = editor.querySelector("#trim-span");
+      strip.setAttribute("x", valid ? 100*start/total : 0);
+      strip.setAttribute("width", valid ? 100*(end-start)/total : 0);
+      editor.querySelector("#trim-length").textContent = valid ? seconds(end-start)+" seconds selected" : "Check the source range";
+    };
+    editor.addEventListener("input",updateTrim);
+    updateTrim();
+  }
   bindRating(clip);
   main.querySelector("#revision")?.addEventListener("submit", async event => {
     event.preventDefault();
@@ -525,6 +611,7 @@ async function route(navigate = false) {
   document.querySelectorAll("nav [aria-current]").forEach(link => link.setAttribute("aria-current", "page"));
   api("health").then(status => online(status.online)).catch(() => online(false));
   document.title = "ClipFarm — " + (section !== "runs" ? "Clip generator" : clip ? "Clip details" : id ? "Run" : "My runs");
+  document.querySelector("#context").textContent = document.title.split(" — ")[1];
   if (section !== "runs") generator();
   else if (id) {
     runSkeleton();
@@ -534,7 +621,7 @@ async function route(navigate = false) {
     api("jobs").then(jobs => {
       if (token !== turn) return;
       main.querySelector("#history").innerHTML = jobs.length ? jobs.map(job =>
-        `<div class="run-row"><a href="${runPath(job.id)}">${escapeHTML(job.name)}</a><span class="run-meta"><span class="run-state">${labels[job.state]}</span><span class="meta">${readySummary(job.ready, job.ready_originals, job.requested)}</span></span></div>`
+        `<div class="run-row"><a href="${runPath(job.id)}">${escapeHTML(job.name)}</a><span class="run-meta"><span class="run-state">${labels[job.state]}</span><span class="meta">${readySummary(job.ready, job.ready_originals, job.requested)} · ${durationLabel(JSON.parse(job.duration_json || "null"))}</span></span></div>`
       ).join("") : '<div class="empty">No runs yet. <a href="#/">Generate your first clips</a>.</div>';
     }).catch(error => { if (token === turn) alertMessage(error); });
   }

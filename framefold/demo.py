@@ -55,7 +55,8 @@ def build(archive, output, name, credit=""):
     if not cards:
         raise ValueError("The archive contains no verified clips.")
     index = (WEB / "index.html").read_text()
-    header = index[index.index('  <header'):index.index('  <main')]
+    header = index[index.index('  <header'):index.index('</header>') + len('</header>')]
+    header = re.sub(r'<a class="button primary rail-new".*?</a>', '', header)
     header = re.sub(r'<nav.*?</nav>', '', header)
     header = header.replace('href="#/"', 'href="./"').replace('Checking worker', 'Example run')
     page = f"""<!doctype html>

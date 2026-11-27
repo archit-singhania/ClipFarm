@@ -1,4 +1,5 @@
 """Loopback HTTP control API and browser entry point."""
+from . import durations
 import argparse
 import json
 import mimetypes
@@ -42,6 +43,9 @@ def settings(values):
         if not isinstance(music_id, str) or not TOKEN.fullmatch(music_id):
             raise ValueError("Choose a soundtrack you uploaded.")
         options["music_id"] = music_id
+    preference = durations.normalize(values.get("duration"))
+    if preference:
+        options["duration"] = preference
     return options
 
 
@@ -77,6 +81,8 @@ class Handler(BaseHTTPRequestHandler):
                 raise LookupError
         except LookupError:
             self.reply({"error": "This item could not be found."}, 404)
+        except imports.StorageError as exc:
+            self.reply({"error": str(exc)}, 507)
         except (ValueError, TypeError, OverflowError) as exc:
             self.reply({"error": worker.public_error(exc, "Choose a playable video and try again.")}, 400)
         except (BrokenPipeError, ConnectionResetError):
@@ -198,6 +204,9 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(key, str) or not 1 <= len(key) <= 100:
             raise ValueError("Generate requires an idempotency key.")
         options = self.export_options(body.get("settings", {}))
+        pref = json.loads(options).get("duration")
+        if pref and json.loads(source["metadata"])["duration_ms"] < durations.bounds(pref)[0]:
+            raise ValueError("The source is too short for this duration. Choose a shorter length or Auto.")
         run = identifier()
         with db() as connection:
             connection.execute("INSERT OR IGNORE INTO jobs (id,owner,source,request_key,settings) VALUES (?,?,?,?,?)",
@@ -306,8 +315,8 @@ class Handler(BaseHTTPRequestHandler):
                     start, end = body.get("start_ms"), body.get("end_ms")
                     duration = json.loads(clip["metadata"])["duration_ms"]
                     if (type(start) is not int or type(end) is not int
-                            or not 0 <= start < end <= duration or not 1000 <= end-start <= 90000):
-                        raise ValueError("Choose a range of 1 to 90 seconds within the source.")
+                            or not 0 <= start < end <= duration or not 1000 <= end-start <= 300000):
+                        raise ValueError("Choose a range of 1 to 300 seconds within the source.")
                     options = self.export_options(json.loads(clip["options"]) | body.get("settings", {}))
                     existing = connection.execute(
                         """SELECT id FROM clips WHERE parent=? AND start_ms=? AND end_ms=? AND options=?""",
@@ -330,7 +339,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply({"online": worker.online(), "version": media.VERSION})
             if parts == ["jobs"]:
                 return self.reply(query("""SELECT j.id,j.state,j.created,s.name,
-                    coalesce(json_extract(j.settings, '$.count'), 3) requested,
+                    json_extract(j.settings, '$.duration') duration_json, coalesce(json_extract(j.settings, '$.count'), 3) requested,
                     count(c.id) ready, count(CASE WHEN c.parent IS NULL THEN c.id END) ready_originals
                     FROM jobs j JOIN sources s ON j.source=s.id
                     LEFT JOIN clips c ON c.job=j.id AND c.state='ready' WHERE j.owner=?

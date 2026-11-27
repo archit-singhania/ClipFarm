@@ -43,9 +43,18 @@ def public_url(url):
     raise ValueError("The video link redirected too many times.")
 
 
+class StorageError(ValueError):
+    pass
+
+
 def require_space(directory, needed=0):
-    if shutil.disk_usage(directory).free < RESERVE + needed:
-        raise ValueError("There is insufficient disk space for this recording. Free storage and retry.")
+    free = shutil.disk_usage(directory).free
+    if free < RESERVE + needed:
+        raise StorageError(
+            f"Insufficient disk space. This step needs {(RESERVE + needed) / 1024**2:,.1f} MiB "
+            f"including a 512 MiB reserve. Available: {free / 1024**2:,.1f} MiB. "
+            "Free space or set CLIPFARM_DATA to a larger drive and restart."
+        )
 
 
 def save_url(url, owner):
@@ -120,7 +129,7 @@ def stream_file(stream, length, staging, limit=None):
                 digest.update(chunk)
     except OSError as exc:
         if exc.errno == errno.ENOSPC:
-            raise ValueError("The disk filled during transfer. Free storage and retry.") from exc
+            raise StorageError("The disk filled during transfer. Free storage and retry.") from exc
         raise
     if length is not None and size != length:
         raise ValueError("The transfer ended early. Try again.")

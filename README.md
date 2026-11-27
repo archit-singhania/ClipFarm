@@ -77,3 +77,9 @@ The speech test additionally uses `FRAMEFOLD_WHISPER_MODEL` and macOS `say`, or 
 2. Select **Video link**, paste `https://youtu.be/HOfdboHvshg`, choose **5** under **Clip target**, and click **Generate clips**. The link points to Blender’s 52-second *Sintel* trailer. [Original video](https://www.youtube.com/watch?v=HOfdboHvshg)
 3. When the run finishes, play a pick. Choose **Download all**, unzip the archive, and compare the number of MP4s with the ready count in Results. Reopen **My runs** in the same browser to verify that the run is saved.
 4. For a longer test, select **New run**, then **Upload file**. Choose a recording with many distinct moments, set the target to **100**, and keep the tab open during transfer. Results shows how many original picks finished. A short or repetitive recording can yield fewer than the target.
+
+### Clip duration
+
+Choose **Auto** for natural highlights, or choose a preset or custom length between one second and five minutes. **Target** permits a 20% deviation to reach a timed sentence ending or fit the source. **Exact** selects the requested interval and verifies the rendered file within 50 milliseconds, allowing for the 30 fps output and container timing. **Range** keeps source intervals between the specified minimum and maximum. Target and Range share the existing 250 ms container verification tolerance. All bounds are stored as integer milliseconds.
+
+The generator rejects sources shorter than the required minimum. ClipFarm ranks evidence-backed windows before removing overlapping or visually repeated picks. For configured lengths of 30 seconds or more, at least 15% of each selected interval must contain detected speech, motion or audio activity. A run can finish with fewer clips than requested. Results show measured export durations. In Details, trim and save a separate copy between one second and five minutes.

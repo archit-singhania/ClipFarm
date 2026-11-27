@@ -73,7 +73,9 @@ async function run() {
       await page.getByRole("button", { name: "Upload file" }).click();
       await target.getByRole("radio", { name: String(count), exact: true }).check();
       await page.getByLabel("Choose a video").setInputFiles(file);
+      await page.locator("[name=lengthPreset]").selectOption(useMusic ? "10" : "auto");
       if (useMusic) {
+        await page.getByLabel("Duration mode").selectOption("exact");
         await page.locator("summary").click();
         await page.getByLabel("Framing", { exact: true }).selectOption("track");
         await page.locator("#music").setInputFiles(music);
@@ -105,6 +107,8 @@ async function run() {
     const job = await finished(resultId);
     assert.equal(job.state, "ready", JSON.stringify(job));
     assert.equal((await finished(staticId)).state, "no_matches");
+    assert.deepEqual(job.settings.duration, {mode:"exact", target_ms:10000});
+    assert.ok(Math.abs(job.clips[0].artifact.duration_ms - 10000) <= 50);
     assert.ok(job.clips[0].artifact.soundtrack, "Selected music reaches the encoded clip.");
     await page.goto(base + "/#/runs/" + resultId);
     await page.locator("#run-caption").filter({ hasText: "of 100 requested clips ready" }).waitFor();
@@ -128,7 +132,7 @@ async function run() {
     const pendingId = page.url().split("/").pop();
     assert.equal((await readJob(pendingId)).settings.count, 50);
     await page.goto(base + "/#/runs");
-    await page.getByText("0 of 50 requested clips ready", { exact: true }).waitFor();
+    await page.locator("#history").getByText(/0 of 50 requested clips ready/).waitFor();
 
     const detailURL = base + "/#/runs/" + resultId + "/" + job.clips[0].id;
     const ratingPath = "/api/clips/" + job.clips[0].id + "/rating";
@@ -241,8 +245,14 @@ async function run() {
                 && el.scrollWidth <= el.clientWidth + 1;
             });
             assert.ok(fits, theme + " picker must fit at " + width + "px");
+            if (process.env.CLIPFARM_VISUAL_DIR && [390,1440].includes(width)) {
+              await page.screenshot({path:path.join(process.env.CLIPFARM_VISUAL_DIR,theme+"-"+width+"-picker.png")});
+            }
             if (width === 320 || width === 1440) await scan("theme picker", width, theme);
             await page.keyboard.press("Escape");
+          }
+          if (process.env.CLIPFARM_VISUAL_DIR && [390,1440].includes(width)) {
+            await page.screenshot({path:path.join(process.env.CLIPFARM_VISUAL_DIR,theme+"-"+width+"-"+name+".png")});
           }
           const dimensions = await page.evaluate(() => [innerWidth, document.documentElement.scrollWidth, document.documentElement.dataset.theme]);
           assert.deepEqual(dimensions, [width, width, theme], name + " layout or theme");

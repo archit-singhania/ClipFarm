@@ -11,6 +11,7 @@ import tempfile
 from pathlib import Path
 
 from .config import setting
+from .durations import bounds, windows
 
 from .captions import overlay_inputs
 from .ranking import rank
@@ -180,13 +181,17 @@ def analyze(source, metadata, directory, *, transcribe=True):
                    for start in range(0, duration, WINDOW_MS))
 
 
-def propose(signals, duration):
+def propose(signals, duration, preference=None):
     """Find bounded windows around spoken thoughts and sustained activity."""
     candidates = []
+    # Measure activity in windows sized for this run before ranking. Auto
+    # retains the original phrase and motion grouping.
+    phrase_span = bounds(preference)[1] if preference else 35000
+    event_samples = max(3, phrase_span // 500) if preference else 54
     current = []
     for segment in signals["speech"]:
         if current and (segment["start"] - current[-1]["end"] > 1600
-                        or segment["end"] - current[0]["start"] > 35000):
+                        or segment["end"] - current[0]["start"] > phrase_span):
             candidates.append(speech_candidate(current))
             current = []
         current.append(segment)
@@ -211,15 +216,18 @@ def propose(signals, duration):
         for group in groups:
             if len(group) < 3:
                 continue
-            for offset in range(0, len(group), 54):
-                event = group[offset:offset+54]
+            for offset in range(0, len(group), event_samples):
+                event = group[offset:offset+event_samples]
                 if len(event) < 3:
                     continue
                 start, end = event[0]*500 - 1200, (event[-1]+1)*500 + 1400
                 strength = statistics.mean(values[i] for i in event) / threshold
                 candidates.append((start, end, min(strength, 10) + min(len(event), 25) / 25, reason))
-    return [(max(0, start), min(end, duration), score, reason)
+    rows = [(max(0, start), min(end, duration), score, reason)
             for start, end, score, reason in candidates if min(end, duration)-max(0, start) >= 2400]
+
+
+    return windows(rows, signals, duration, preference)
 
 
 def scene_signature(signals, start, end):
@@ -259,7 +267,7 @@ def distinct_picks(ordered, count):
 
 def select(signals, duration, count, selector=None):
     """Rank and deduplicate windows before assigning stable pick numbers."""
-    ordered, version = rank(signals, propose(signals, duration), selector)
+    ordered, version = rank(signals, propose(signals, duration, signals.get("duration")), selector)
     rows = ((a, b, reason, scene_signature(signals, a, b)) for (a, b, _, reason), _ in ordered)
     return distinct_picks(rows, count), version
 
@@ -368,7 +376,8 @@ def render(source, metadata, clip, directory, speech):
         actual = probe(staging)
         if (actual["width"], actual["height"], actual["codec"]) != (width, height, "h264"):
             raise ValueError("The rendered file does not match the export preset.")
-        if abs(actual["duration_ms"] - (end-start)) > 250 or actual["audio"] != (metadata["audio"] or bool(music_id)):
+        tolerance = 50 if options.get("duration", {}).get("mode") == "exact" else 250
+        if abs(actual["duration_ms"] - (end-start)) > tolerance or actual["audio"] != (metadata["audio"] or bool(music_id)):
             raise ValueError("The rendered timing or audio failed verification.")
         ffmpeg(staging, "-map", "0:v:0", "-frames:v", "1", "-f", "null", "-", timeout=30)
         with staging.open("rb") as handle:

@@ -57,11 +57,13 @@ def process(job):
         manifest = path / "analysis.json"
         if not manifest.exists():
             if info["duration_ms"] > media.WINDOW_MS:
-                result = analysis.build(source, info, path, settings.get("selector"), lambda: cancelled(job))
+                result = analysis.build(source, info, path, settings.get("selector"), lambda: cancelled(job), settings.get("duration"))
                 if result is None:
                     return
             else:
                 result = media.analyze(source, info, path)
+            if settings.get("duration"):
+                result["duration"] = settings["duration"]
             temporary = manifest.with_suffix(".tmp")
             temporary.write_text(encode(result))
             temporary.replace(manifest)

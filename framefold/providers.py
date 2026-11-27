@@ -12,7 +12,7 @@ from yt_dlp.networking._urllib import RedirectHandler, UrllibRH, UrllibResponseA
 from yt_dlp.networking.exceptions import RequestError
 from yt_dlp.utils import DownloadError, determine_protocol
 
-from .imports import BLOCK, require_space
+from .imports import BLOCK, RESERVE, StorageError, require_space
 from .media import FFMPEG, INPUT, command
 from .public_network import PublicHTTPSConnection, https_url
 
@@ -200,6 +200,33 @@ def download_track(client, track, path):
         raise ValueError("The provider transfer ended early. Retry or upload the recording.")
 
 
+def fitting_tracks(info, directory):
+    preferred = info.get("requested_formats") or [info]
+    budget = shutil.disk_usage(directory).free - RESERVE
+    duration = info.get("duration") or 0
+
+    def peak(tracks):
+        sizes = [t.get("filesize") or t.get("filesize_approx")
+                 or duration * (t.get("tbr") or 0) * 125 for t in tracks]
+        return sum(sizes) * (2.05 if len(tracks) > 1 else 1)
+
+    if peak(preferred) <= budget:
+        return preferred
+    formats = list(reversed(info.get("formats") or []))
+    videos = [f for f in formats if f.get("vcodec") != "none" and (f.get("height") or 0) <= 2160]
+    audios = [f for f in formats if f.get("vcodec") == "none" and f.get("acodec") != "none"]
+    candidates = [[v] for v in videos if v.get("acodec") != "none"]
+    candidates.extend([v, a] for v in videos if v.get("acodec") == "none" for a in audios)
+    if not audios and all(v.get("acodec") == "none" for v in videos):
+        candidates.extend([v] for v in videos)
+    for tracks in candidates:
+        if peak(tracks) <= budget:
+            return tracks
+    smallest = min([preferred, *candidates], key=peak)
+    require_space(directory, peak(smallest))
+    return smallest
+
+
 def recording(url, directory):
     require_space(directory)
     options = {
@@ -218,13 +245,15 @@ def recording(url, directory):
                 raise ValueError("The provider could not find a finished recording at this URL.")
             if info.get("section_start") or info.get("section_end"):
                 raise ValueError("Paste the full recording link or upload the clipped file.")
-            tracks = info.get("requested_formats") or [info]
+            tracks = fitting_tracks(info, directory)
             paths = []
             for index, track in enumerate(tracks):
                 path = directory / f"track-{index}"
                 download_track(client, {**track, "id": info["id"]}, path)
                 paths.append(path)
     except (DownloadError, RequestError, OSError) as exc:
+        if "no space" in str(exc).lower():
+            raise StorageError("The disk filled during download. Free space or use a larger CLIPFARM_DATA drive.") from exc
         raise ValueError(provider_error(exc)) from exc
 
     if len(paths) == 1:
